@@ -109,7 +109,7 @@ column_link_rebuild_entries(column_link_info_t *info)
     column_link_entry_t *e, *ei, *ej;
     sip_msg_t *msg = NULL;
     char *traffic;
-    int i, j, n, si, di;
+    int i, n, si, di;
 
     if (!info->parent_flow)
         return;
@@ -149,19 +149,15 @@ column_link_rebuild_entries(column_link_info_t *info)
         vector_append(info->entries, e);
     }
 
-    /* Mark suggestions: pairs with zero traffic and neither already linked */
-    for (i = 0; i < n; i++) {
+    /* Suggest only adjacent column pairs with no traffic between them */
+    for (i = 0; i < n - 1; i++) {
         ei = vector_item(info->entries, i);
-        if (ei->linked_to)
+        ej = vector_item(info->entries, i + 1);
+        if (ei->linked_to || ej->linked_to)
             continue;
-        for (j = i + 1; j < n; j++) {
-            ej = vector_item(info->entries, j);
-            if (ej->linked_to)
-                continue;
-            if (!traffic[i * n + j]) {
-                ei->suggested = 1;
-                ej->suggested = 1;
-            }
+        if (!traffic[i * n + (i + 1)]) {
+            ei->suggested = 1;
+            ej->suggested = 1;
         }
     }
 
@@ -215,7 +211,7 @@ column_link_draw(ui_t *ui)
             snprintf(status, sizeof(status), "linked -> %s:%u",
                      e->linked_to->ip, e->linked_to->port);
         } else if (e->suggested) {
-            snprintf(status, sizeof(status), "* suggested (no traffic seen)");
+            snprintf(status, sizeof(status), "* suggested (adjacent, no traffic)");
         }
 
         mvwprintw(win, row, 2, "%-28s %-38s", e->label, status);
@@ -234,7 +230,6 @@ column_link_handle_key(ui_t *ui, int key)
     column_link_entry_t *e, *first, *other;
     int n = vector_count(info->entries);
     int action = -1;
-    int j;
 
     if (n <= 0)
         return KEY_NOT_HANDLED;
@@ -292,15 +287,23 @@ column_link_handle_key(ui_t *ui, int key)
             }
             return KEY_HANDLED;
         case '*':
+            /* Link highlighted entry with its adjacent suggested neighbor */
             e = vector_item(info->entries, info->cur);
             if (e->suggested && !e->linked_to) {
-                for (j = 0; j < n; j++) {
-                    other = vector_item(info->entries, j);
-                    if (other != e && other->suggested && !other->linked_to) {
-                        call_flow_column_link_add(e->addr, other->addr);
-                        column_link_rebuild_entries(info);
-                        break;
-                    }
+                other = NULL;
+                if (info->cur > 0) {
+                    other = vector_item(info->entries, info->cur - 1);
+                    if (!other->suggested || other->linked_to)
+                        other = NULL;
+                }
+                if (!other && info->cur + 1 < n) {
+                    other = vector_item(info->entries, info->cur + 1);
+                    if (!other->suggested || other->linked_to)
+                        other = NULL;
+                }
+                if (other) {
+                    call_flow_column_link_add(e->addr, other->addr);
+                    column_link_rebuild_entries(info);
                 }
             }
             return KEY_HANDLED;

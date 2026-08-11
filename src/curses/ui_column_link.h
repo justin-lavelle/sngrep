@@ -53,7 +53,7 @@ struct column_link_entry {
     call_flow_column_t *column;
     //! Current link partner, or NULL
     address_t *linked_to;
-    //! 1 when no traffic was seen with another unlinked endpoint
+    //! 1 when adjacent to another unlinked column with no traffic between them
     int suggested;
 };
 
