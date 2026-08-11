@@ -114,6 +114,17 @@ struct call_flow_arrow {
 };
 
 /**
+ * @brief One user-declared association between two physical endpoints
+ *
+ * Used to merge multi-homed host lifelines (e.g. SIP-in and SIP-out legs)
+ * into a single screen column. Stored by address so it survives column rebuilds.
+ */
+typedef struct call_flow_column_link {
+    address_t addr1;
+    address_t addr2;
+} call_flow_column_link_t;
+
+/**
  * @brief Structure to hold one column information
  *
  * One column has one address:port for packets source or destination matching
@@ -131,6 +142,8 @@ struct call_flow_column {
     vector_t *callids;
     //! Column position (starting with zero) // FIXME array position?
     int colpos;
+    //! Partner column for this draw pass when multi-homed links are active
+    struct call_flow_column *link;
 };
 
 /**
@@ -529,5 +542,49 @@ call_flow_arrow_sorter(vector_t *vector, void *item);
  */
 int
 call_flow_arrow_filter(void *item);
+
+/**
+ * @brief Add or replace a 1:1 multi-homed column link
+ *
+ * Any existing link involving either address is removed first.
+ *
+ * @param a First endpoint address
+ * @param b Second endpoint address
+ */
+void
+call_flow_column_link_add(address_t a, address_t b);
+
+/**
+ * @brief Remove any link involving the given address
+ *
+ * @param a Endpoint address
+ */
+void
+call_flow_column_link_remove(address_t a);
+
+/**
+ * @brief Get the linked partner address for a given endpoint
+ *
+ * @param a Endpoint address
+ * @return pointer to partner address, or NULL if unlinked
+ */
+address_t *
+call_flow_column_link_get(address_t a);
+
+/**
+ * @brief Check if two addresses are currently linked
+ *
+ * @param a First endpoint address
+ * @param b Second endpoint address
+ * @return 1 if linked, 0 otherwise
+ */
+int
+call_flow_column_link_are_linked(address_t a, address_t b);
+
+/**
+ * @brief Clear all multi-homed column links
+ */
+void
+call_flow_column_link_clear_all();
 
 #endif /* __SNGREP_UI_CALL_FLOW_H */

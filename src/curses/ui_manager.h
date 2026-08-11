@@ -61,6 +61,7 @@ extern ui_t ui_msg_diff;
 extern ui_t ui_column_select;
 extern ui_t ui_settings;
 extern ui_t ui_stats;
+extern ui_t ui_column_link;
 
 /**
  * @brief Initialize ncurses mode

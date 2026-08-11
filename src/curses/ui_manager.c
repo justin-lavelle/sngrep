@@ -46,6 +46,7 @@
 #include "ui_column_select.h"
 #include "ui_save.h"
 #include "ui_settings.h"
+#include "ui_column_link.h"
 
 /**
  * @brief Available panel windows list
@@ -63,7 +64,8 @@ static ui_t *panel_pool[] = {
     &ui_msg_diff,
     &ui_column_select,
     &ui_settings,
-    &ui_stats
+    &ui_stats,
+    &ui_column_link
 };
 
 int

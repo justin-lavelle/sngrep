@@ -35,11 +35,18 @@
 #include "ui_call_raw.h"
 #include "ui_msg_diff.h"
 #include "ui_save.h"
+#include "ui_column_link.h"
 #include "util.h"
 #include "vector.h"
 #include "option.h"
 
 #define METHOD_MAXLEN 80
+
+/* Persisted across redraws / calls, cleared only on demand */
+static vector_t *column_links = NULL;
+
+static void call_flow_column_header_text(call_flow_column_t *column, char *coltext, size_t len);
+static void call_flow_columns_resolve_links(call_flow_info_t *info);
 
 /***
  *
@@ -239,10 +246,11 @@ call_flow_draw_footer(ui_t *ui)
         key_action_key_str(ACTION_COMPRESS), "Compressed",
         key_action_key_str(ACTION_SHOW_RAW), "Raw",
         key_action_key_str(ACTION_CYCLE_COLOR), "Colour by",
-        key_action_key_str(ACTION_INCREASE_RAW), "Increase Raw"
+        key_action_key_str(ACTION_INCREASE_RAW), "Increase Raw",
+        key_action_key_str(ACTION_COLUMN_LINK), "Link Columns"
     };
 
-    ui_draw_bindings(ui, keybindings, 22);
+    ui_draw_bindings(ui, keybindings, 24);
 }
 
 int
@@ -256,6 +264,7 @@ call_flow_draw_columns(ui_t *ui)
     vector_iter_t streams;
     vector_iter_t columns;
     char coltext[MAX_SETTING_LEN];
+    char linktext[MAX_SETTING_LEN];
     address_t addr;
 
     // Get panel information
@@ -292,9 +301,18 @@ call_flow_draw_columns(ui_t *ui)
         }
     }
 
+    // Merge multi-homed linked columns onto shared screen slots
+    call_flow_columns_resolve_links(info);
+
     // Draw columns
     columns = vector_iterator(info->columns);
     while ((column = vector_iterator_next(&columns))) {
+        // Partner already drew this lifeline
+        if (column->link && vector_index(info->columns, column->link)
+            < vector_index(info->columns, column)) {
+            continue;
+        }
+
         mvwvline(info->flow_win, 0, 20 + 30 * column->colpos, ACS_VLINE, ui->height - 6);
         mvwhline(ui->win, 3, 10 + 30 * column->colpos, ACS_HLINE, 20);
         mvwaddch(ui->win, 3, 20 + 30 * column->colpos, ACS_TTEE);
@@ -305,27 +323,18 @@ call_flow_draw_columns(ui_t *ui)
                 wattron(ui->win, A_BOLD);
         }
 
-        if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
-            snprintf(coltext, MAX_SETTING_LEN, "%s", column->alias);
-        } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
-            if (strlen(column->alias) > 15) {
-                snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
-                         MAX_SETTING_LEN - 9, column->alias + strlen(column->alias) - 13, column->addr.port);
-            } else {
-                snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
-                         MAX_SETTING_LEN - 7, column->alias, column->addr.port);
-            }
-        } else {
-            if (strlen(column->addr.ip) > 15) {
-                snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
-                         MAX_SETTING_LEN - 9, column->addr.ip + strlen(column->addr.ip) - 13, column->addr.port);
-            } else {
-                snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
-                         MAX_SETTING_LEN - 7, column->addr.ip, column->addr.port);
-            }
-        }
+        call_flow_column_header_text(column, coltext, sizeof(coltext));
 
-        mvwprintw(ui->win, 2, 10 + 30 * column->colpos + (22 - strlen(coltext)) / 2, "%s", coltext);
+        if (column->link) {
+            call_flow_column_header_text(column->link, linktext, sizeof(linktext));
+            mvwprintw(ui->win, 1, 10 + 30 * column->colpos + (22 - strlen(coltext)) / 2,
+                      "%s", coltext);
+            mvwprintw(ui->win, 2, 10 + 30 * column->colpos + (22 - strlen(linktext)) / 2,
+                      "%s", linktext);
+        } else {
+            mvwprintw(ui->win, 2, 10 + 30 * column->colpos + (22 - strlen(coltext)) / 2,
+                      "%s", coltext);
+        }
         wattroff(ui->win, A_BOLD);
     }
 
@@ -518,7 +527,9 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
 
     // Determine start and end position of the arrow line
     int startpos, endpos;
-    if (arrow->scolumn == arrow->dcolumn) {
+    if (arrow->scolumn == arrow->dcolumn
+        || (arrow->scolumn && arrow->dcolumn
+            && arrow->scolumn->colpos == arrow->dcolumn->colpos)) {
         arrow->dir = CF_ARROW_SPIRAL;
         startpos = 19 + 30 * arrow->dcolumn->colpos;
         endpos = 20 + 30 * arrow->scolumn->colpos;
@@ -780,7 +791,11 @@ call_flow_draw_rtp_stream(ui_t *ui, call_flow_arrow_t *arrow, int cline)
 
     // Determine start and end position of the arrow line
     int startpos, endpos;
-    if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
+    if (arrow->scolumn->colpos == arrow->dcolumn->colpos) {
+        arrow->dir = CF_ARROW_SPIRAL;
+        startpos = 20 + 30 * arrow->scolumn->colpos;
+        endpos = startpos;
+    } else if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
         arrow->dir= CF_ARROW_RIGHT;
         startpos = 20 + 30 * arrow->scolumn->colpos;
         endpos = 20 + 30 * arrow->dcolumn->colpos;
@@ -999,7 +1014,11 @@ call_flow_draw_event(ui_t *ui, call_flow_arrow_t *arrow, int cline)
 
     // Determine start and end position of the arrow line
     int startpos, endpos;
-    if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
+    if (arrow->scolumn->colpos == arrow->dcolumn->colpos) {
+        arrow->dir = CF_ARROW_SPIRAL;
+        startpos = 20 + 30 * arrow->scolumn->colpos;
+        endpos = startpos;
+    } else if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
         arrow->dir= CF_ARROW_RIGHT;
         startpos = 20 + 30 * arrow->scolumn->colpos;
         endpos = 20 + 30 * arrow->dcolumn->colpos;
@@ -1595,6 +1614,10 @@ call_flow_handle_key(ui_t *ui, int key)
                 save_set_msg(next_ui,
                     call_flow_arrow_message(vector_item(info->darrows, info->cur_arrow)));
                 break;
+            case ACTION_COLUMN_LINK:
+                next_ui = ui_create_panel(PANEL_COLUMN_LINK);
+                column_link_set_flow(next_ui, ui);
+                break;
             case ACTION_TOGGLE_TIME:
                 info->arrowtime = (info->arrowtime) ? false : true;
                 break;
@@ -1647,7 +1670,7 @@ call_flow_help(ui_t *ui)
     int height, width;
 
     // Create a new panel and show centered
-    height = 28;
+    height = 29;
     width = 65;
     help_win = newwin(height, width, (LINES - height) / 2, (COLS - width) / 2);
 
@@ -1696,6 +1719,7 @@ call_flow_help(ui_t *ui)
     mvwprintw(help_win, 22, 2, "t           Toggle raw preview display");
     mvwprintw(help_win, 23, 2, "T           Restore raw preview size");
     mvwprintw(help_win, 24, 2, "D           Only show SDP messages");
+    mvwprintw(help_win, 25, 2, "F10/L       Link multi-homed columns");
 
     // Press any key to close
     wgetch(help_win);
@@ -1754,6 +1778,7 @@ call_flow_column_add(ui_t *ui, const char *callid, address_t addr)
     column->callids = vector_create(1, 1);
     vector_append(column->callids, (void*)callid);
     column->addr = addr;
+    column->link = NULL;
     if (setting_enabled(SETTING_ALIAS_PORT)) {
         sng_strncpy(column->alias, get_alias_value_vs_port(addr.ip, addr.port), sizeof(column->alias));
     } else {
@@ -1761,6 +1786,154 @@ call_flow_column_add(ui_t *ui, const char *callid, address_t addr)
     }
     column->colpos = vector_count(info->columns);
     vector_append(info->columns, column);
+}
+
+static void
+call_flow_column_header_text(call_flow_column_t *column, char *coltext, size_t len)
+{
+    if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
+        snprintf(coltext, len, "%s", column->alias);
+    } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
+        if (strlen(column->alias) > 15) {
+            snprintf(coltext, len, "..%.*s:%u",
+                     (int)len - 9, column->alias + strlen(column->alias) - 13,
+                     column->addr.port);
+        } else {
+            snprintf(coltext, len, "%.*s:%u",
+                     (int)len - 7, column->alias, column->addr.port);
+        }
+    } else {
+        if (strlen(column->addr.ip) > 15) {
+            snprintf(coltext, len, "..%.*s:%u",
+                     (int)len - 9, column->addr.ip + strlen(column->addr.ip) - 13,
+                     column->addr.port);
+        } else {
+            snprintf(coltext, len, "%.*s:%u",
+                     (int)len - 7, column->addr.ip, column->addr.port);
+        }
+    }
+}
+
+static void
+call_flow_columns_resolve_links(call_flow_info_t *info)
+{
+    int i, j, slot;
+    call_flow_column_t *col, *cand;
+    address_t *partner_addr;
+
+    for (i = 0; i < vector_count(info->columns); i++) {
+        col = vector_item(info->columns, i);
+        col->link = NULL;
+        partner_addr = call_flow_column_link_get(col->addr);
+        if (!partner_addr)
+            continue;
+
+        for (j = 0; j < vector_count(info->columns); j++) {
+            cand = vector_item(info->columns, j);
+            if (addressport_equals(cand->addr, *partner_addr)) {
+                col->link = cand;
+                break;
+            }
+        }
+    }
+
+    /* Re-flow x-positions: linked pairs occupy a single slot */
+    for (i = 0; i < vector_count(info->columns); i++) {
+        col = vector_item(info->columns, i);
+        col->colpos = -1;
+    }
+
+    slot = 0;
+    for (i = 0; i < vector_count(info->columns); i++) {
+        col = vector_item(info->columns, i);
+        if (col->colpos != -1)
+            continue;
+
+        col->colpos = slot;
+        if (col->link)
+            col->link->colpos = slot;
+        slot++;
+    }
+}
+
+void
+call_flow_column_link_add(address_t a, address_t b)
+{
+    call_flow_column_link_t *link;
+
+    if (!column_links)
+        column_links = vector_create(4, 4);
+
+    /* Replace any existing link involving either address (1:1 links only) */
+    call_flow_column_link_remove(a);
+    call_flow_column_link_remove(b);
+
+    link = sng_malloc(sizeof(call_flow_column_link_t));
+    link->addr1 = a;
+    link->addr2 = b;
+    vector_append(column_links, link);
+}
+
+void
+call_flow_column_link_remove(address_t a)
+{
+    int i;
+    call_flow_column_link_t *link;
+
+    if (!column_links)
+        return;
+
+    for (i = vector_count(column_links) - 1; i >= 0; i--) {
+        link = vector_item(column_links, i);
+        if (addressport_equals(link->addr1, a) || addressport_equals(link->addr2, a)) {
+            vector_remove(column_links, link);
+            sng_free(link);
+        }
+    }
+}
+
+address_t *
+call_flow_column_link_get(address_t a)
+{
+    int i;
+    call_flow_column_link_t *link;
+
+    if (!column_links)
+        return NULL;
+
+    for (i = 0; i < vector_count(column_links); i++) {
+        link = vector_item(column_links, i);
+        if (addressport_equals(link->addr1, a))
+            return &link->addr2;
+        if (addressport_equals(link->addr2, a))
+            return &link->addr1;
+    }
+    return NULL;
+}
+
+int
+call_flow_column_link_are_linked(address_t a, address_t b)
+{
+    address_t *partner = call_flow_column_link_get(a);
+    return partner && addressport_equals(*partner, b);
+}
+
+void
+call_flow_column_link_clear_all()
+{
+    int i;
+    call_flow_column_link_t *link;
+
+    if (!column_links)
+        return;
+
+    for (i = vector_count(column_links) - 1; i >= 0; i--) {
+        link = vector_item(column_links, i);
+        vector_remove(column_links, link);
+        sng_free(link);
+    }
+    vector_destroy(column_links);
+    column_links = NULL;
 }
 
 call_flow_column_t *

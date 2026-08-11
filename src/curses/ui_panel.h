@@ -74,6 +74,8 @@ enum panel_types {
     PANEL_SETTINGS,
     //! Stats panel
     PANEL_STATS,
+    //! Multi-homed column link panel
+    PANEL_COLUMN_LINK,
     //! Panel Counter
     PANEL_COUNT,
 };
