@@ -131,7 +131,20 @@ struct call_flow_column {
     vector_t *callids;
     //! Column position (starting with zero) // FIXME array position?
     int colpos;
+    //! Display position after column linking (may share with linked columns)
+    int disppos;
 };
+
+/**
+ * @brief Pair of addresses rendered as a single call-flow column
+ */
+struct call_flow_link {
+    address_t addr1;
+    address_t addr2;
+};
+
+//! Sorter declaration of struct call_flow_link
+typedef struct call_flow_link call_flow_link_t;
 
 /**
  * @brief Call flow Extended status information
@@ -164,6 +177,8 @@ struct call_flow_info {
     int maxcallids;
     //! Print timestamp next to the arrow
     bool arrowtime;
+    //! Linked column address pairs (call_flow_link_t *)
+    vector_t *column_links;
 };
 
 /**
@@ -529,5 +544,18 @@ call_flow_arrow_sorter(vector_t *vector, void *item);
  */
 int
 call_flow_arrow_filter(void *item);
+
+/**
+ * @brief Show menu to link call-flow columns into shared steps
+ *
+ * Lists each flow column (IP:port), highlights adjacent columns with no
+ * messages between them as suggested links, and lets the user link or
+ * unlink any two columns so they render as a single step.
+ *
+ * @param ui UI structure pointer
+ * @return 0 on success, -1 on failure
+ */
+int
+call_flow_link_columns_menu(ui_t *ui);
 
 #endif /* __SNGREP_UI_CALL_FLOW_H */

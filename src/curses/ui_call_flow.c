@@ -41,6 +41,158 @@
 
 #define METHOD_MAXLEN 80
 
+/**
+ * Find union-find root for column linking
+ */
+static int
+call_flow_link_find(int *parent, int x)
+{
+    while (parent[x] != x)
+        x = parent[x];
+    return x;
+}
+
+/**
+ * Union two column indices for linking
+ */
+static void
+call_flow_link_union(int *parent, int a, int b)
+{
+    int ra = call_flow_link_find(parent, a);
+    int rb = call_flow_link_find(parent, b);
+    if (ra != rb)
+        parent[rb] = ra;
+}
+
+/**
+ * Check whether two addresses are directly linked
+ */
+static int
+call_flow_addr_pair_linked(call_flow_info_t *info, address_t a, address_t b)
+{
+    vector_iter_t it;
+    call_flow_link_t *link;
+
+    if (!info->column_links)
+        return 0;
+
+    it = vector_iterator(info->column_links);
+    while ((link = vector_iterator_next(&it))) {
+        if ((addressport_equals(link->addr1, a) && addressport_equals(link->addr2, b)) ||
+            (addressport_equals(link->addr1, b) && addressport_equals(link->addr2, a))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Assign packed display positions from column link groups
+ */
+static void
+call_flow_columns_assign_disppos(call_flow_info_t *info)
+{
+    int i, n, next_pos;
+    int *parent, *root_disp;
+    call_flow_column_t *col_i;
+    call_flow_link_t *link;
+    vector_iter_t it;
+
+    n = vector_count(info->columns);
+    if (n == 0)
+        return;
+
+    parent = sng_malloc(sizeof(int) * n);
+    root_disp = sng_malloc(sizeof(int) * n);
+    for (i = 0; i < n; i++) {
+        parent[i] = i;
+        root_disp[i] = -1;
+    }
+
+    if (info->column_links) {
+        it = vector_iterator(info->column_links);
+        while ((link = vector_iterator_next(&it))) {
+            int idx1 = -1, idx2 = -1;
+            for (i = 0; i < n; i++) {
+                col_i = vector_item(info->columns, i);
+                if (addressport_equals(col_i->addr, link->addr1))
+                    idx1 = i;
+                if (addressport_equals(col_i->addr, link->addr2))
+                    idx2 = i;
+            }
+            if (idx1 >= 0 && idx2 >= 0)
+                call_flow_link_union(parent, idx1, idx2);
+        }
+    }
+
+    next_pos = 0;
+    for (i = 0; i < n; i++) {
+        int root = call_flow_link_find(parent, i);
+        if (root_disp[root] < 0)
+            root_disp[root] = next_pos++;
+        col_i = vector_item(info->columns, i);
+        col_i->disppos = root_disp[root];
+    }
+
+    sng_free(parent);
+    sng_free(root_disp);
+}
+
+/**
+ * True when any SIP message travels between the two column addresses
+ */
+static int
+call_flow_columns_have_messages(call_flow_info_t *info, call_flow_column_t *a,
+                                call_flow_column_t *b)
+{
+    sip_msg_t *msg = NULL;
+
+    while ((msg = call_group_get_next_msg(info->group, msg))) {
+        if ((addressport_equals(msg->packet->src, a->addr) &&
+             addressport_equals(msg->packet->dst, b->addr)) ||
+            (addressport_equals(msg->packet->src, b->addr) &&
+             addressport_equals(msg->packet->dst, a->addr))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Mark adjacent columns that have no traffic between them as suggested
+ */
+static void
+call_flow_link_mark_suggestions(call_flow_info_t *info, int *suggested, int col_count)
+{
+    int i;
+
+    memset(suggested, 0, sizeof(int) * col_count);
+    for (i = 0; i < col_count - 1; i++) {
+        call_flow_column_t *a = vector_item(info->columns, i);
+        call_flow_column_t *b = vector_item(info->columns, i + 1);
+        if (!call_flow_columns_have_messages(info, a, b) &&
+            !call_flow_addr_pair_linked(info, a->addr, b->addr)) {
+            suggested[i] = 1;
+            suggested[i + 1] = 1;
+        }
+    }
+}
+
+/**
+ * Format column label as used in the flow header / link menu
+ */
+static void
+call_flow_column_label(call_flow_column_t *column, char *out, size_t outsize)
+{
+    if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
+        snprintf(out, outsize, "%s", column->alias);
+    } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
+        snprintf(out, outsize, "%s:%u", column->alias, column->addr.port);
+    } else {
+        snprintf(out, outsize, "%s:%u", column->addr.ip, column->addr.port);
+    }
+}
+
 /***
  *
  * Some basic ascii art of this panel.
@@ -102,6 +254,8 @@ call_flow_create(ui_t *ui)
     info->columns = vector_create(2, 1);
     info->arrows = vector_create(20, 5);
     vector_set_sorter(info->arrows, call_flow_arrow_sorter);
+    info->column_links = vector_create(0, 2);
+    vector_set_destroyer(info->column_links, vector_generic_destroyer);
 
     // Store it into panel userptr
     set_panel_userptr(ui->panel, (void*) info);
@@ -118,6 +272,8 @@ call_flow_destroy(ui_t *ui)
         vector_destroy_items(info->columns);
         // Delete panel arrows
         vector_destroy_items(info->arrows);
+        // Delete column links
+        vector_destroy_items(info->column_links);
         // Delete panel windows
         delwin(info->flow_win);
         delwin(info->raw_win);
@@ -237,12 +393,13 @@ call_flow_draw_footer(ui_t *ui)
         key_action_key_str(ACTION_TOGGLE_MEDIA), "RTP",
         key_action_key_str(ACTION_SHOW_FLOW_EX), "Extended",
         key_action_key_str(ACTION_COMPRESS), "Compressed",
+        key_action_key_str(ACTION_LINK_COLUMNS), "Link",
         key_action_key_str(ACTION_SHOW_RAW), "Raw",
         key_action_key_str(ACTION_CYCLE_COLOR), "Colour by",
         key_action_key_str(ACTION_INCREASE_RAW), "Increase Raw"
     };
 
-    ui_draw_bindings(ui, keybindings, 22);
+    ui_draw_bindings(ui, keybindings, 24);
 }
 
 int
@@ -293,11 +450,29 @@ call_flow_draw_columns(ui_t *ui)
     }
 
     // Draw columns
+    call_flow_columns_assign_disppos(info);
     columns = vector_iterator(info->columns);
     while ((column = vector_iterator_next(&columns))) {
-        mvwvline(info->flow_win, 0, 20 + 30 * column->colpos, ACS_VLINE, ui->height - 6);
-        mvwhline(ui->win, 3, 10 + 30 * column->colpos, ACS_HLINE, 20);
-        mvwaddch(ui->win, 3, 20 + 30 * column->colpos, ACS_TTEE);
+        // Only draw one vertical line / header per display position
+        if (column->colpos > 0) {
+            call_flow_column_t *prev;
+            int skip = 0;
+            vector_iter_t check = vector_iterator(info->columns);
+            while ((prev = vector_iterator_next(&check))) {
+                if (prev->colpos >= column->colpos)
+                    break;
+                if (prev->disppos == column->disppos) {
+                    skip = 1;
+                    break;
+                }
+            }
+            if (skip)
+                continue;
+        }
+
+        mvwvline(info->flow_win, 0, 20 + 30 * column->disppos, ACS_VLINE, ui->height - 6);
+        mvwhline(ui->win, 3, 10 + 30 * column->disppos, ACS_HLINE, 20);
+        mvwaddch(ui->win, 3, 20 + 30 * column->disppos, ACS_TTEE);
 
         // Set bold to this address if it's local
         if (setting_enabled(SETTING_CF_LOCALHIGHLIGHT)) {
@@ -325,7 +500,7 @@ call_flow_draw_columns(ui_t *ui)
             }
         }
 
-        mvwprintw(ui->win, 2, 10 + 30 * column->colpos + (22 - strlen(coltext)) / 2, "%s", coltext);
+        mvwprintw(ui->win, 2, 10 + 30 * column->disppos + (22 - strlen(coltext)) / 2, "%s", coltext);
         wattroff(ui->win, A_BOLD);
     }
 
@@ -518,18 +693,18 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
 
     // Determine start and end position of the arrow line
     int startpos, endpos;
-    if (arrow->scolumn == arrow->dcolumn) {
+    if (arrow->scolumn->disppos == arrow->dcolumn->disppos) {
         arrow->dir = CF_ARROW_SPIRAL;
-        startpos = 19 + 30 * arrow->dcolumn->colpos;
-        endpos = 20 + 30 * arrow->scolumn->colpos;
-    } else if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
+        startpos = 19 + 30 * arrow->dcolumn->disppos;
+        endpos = 20 + 30 * arrow->scolumn->disppos;
+    } else if (arrow->scolumn->disppos < arrow->dcolumn->disppos) {
         arrow->dir = CF_ARROW_RIGHT;
-        startpos = 20 + 30 * arrow->scolumn->colpos;
-        endpos = 20 + 30 * arrow->dcolumn->colpos;
+        startpos = 20 + 30 * arrow->scolumn->disppos;
+        endpos = 20 + 30 * arrow->dcolumn->disppos;
     } else {
         arrow->dir = CF_ARROW_LEFT;
-        startpos = 20 + 30 * arrow->dcolumn->colpos;
-        endpos = 20 + 30 * arrow->scolumn->colpos;
+        startpos = 20 + 30 * arrow->dcolumn->disppos;
+        endpos = 20 + 30 * arrow->scolumn->disppos;
     }
     int distance = abs(endpos - startpos) - 3;
 
@@ -780,14 +955,14 @@ call_flow_draw_rtp_stream(ui_t *ui, call_flow_arrow_t *arrow, int cline)
 
     // Determine start and end position of the arrow line
     int startpos, endpos;
-    if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
+    if (arrow->scolumn->disppos < arrow->dcolumn->disppos) {
         arrow->dir= CF_ARROW_RIGHT;
-        startpos = 20 + 30 * arrow->scolumn->colpos;
-        endpos = 20 + 30 * arrow->dcolumn->colpos;
+        startpos = 20 + 30 * arrow->scolumn->disppos;
+        endpos = 20 + 30 * arrow->dcolumn->disppos;
     } else {
         arrow->dir = CF_ARROW_LEFT;
-        startpos = 20 + 30 * arrow->dcolumn->colpos;
-        endpos = 20 + 30 * arrow->scolumn->colpos;
+        startpos = 20 + 30 * arrow->dcolumn->disppos;
+        endpos = 20 + 30 * arrow->scolumn->disppos;
     }
     int distance = 0;
 
@@ -999,14 +1174,14 @@ call_flow_draw_event(ui_t *ui, call_flow_arrow_t *arrow, int cline)
 
     // Determine start and end position of the arrow line
     int startpos, endpos;
-    if (arrow->scolumn->colpos < arrow->dcolumn->colpos) {
+    if (arrow->scolumn->disppos < arrow->dcolumn->disppos) {
         arrow->dir= CF_ARROW_RIGHT;
-        startpos = 20 + 30 * arrow->scolumn->colpos;
-        endpos = 20 + 30 * arrow->dcolumn->colpos;
+        startpos = 20 + 30 * arrow->scolumn->disppos;
+        endpos = 20 + 30 * arrow->dcolumn->disppos;
     } else {
         arrow->dir = CF_ARROW_LEFT;
-        startpos = 20 + 30 * arrow->dcolumn->colpos;
-        endpos = 20 + 30 * arrow->scolumn->colpos;
+        startpos = 20 + 30 * arrow->dcolumn->disppos;
+        endpos = 20 + 30 * arrow->scolumn->disppos;
     }
     int distance = 0;
 
@@ -1598,6 +1773,9 @@ call_flow_handle_key(ui_t *ui, int key)
             case ACTION_TOGGLE_TIME:
                 info->arrowtime = (info->arrowtime) ? false : true;
                 break;
+            case ACTION_LINK_COLUMNS:
+                call_flow_link_columns_menu(ui);
+                break;
             case ACTION_SELECT:
                 if (info->selected == -1) {
                     info->selected = info->cur_arrow;
@@ -1691,15 +1869,254 @@ call_flow_help(ui_t *ui)
     mvwprintw(help_win, 17, 2, "F6/R        Show original call messages in raw mode");
     mvwprintw(help_win, 18, 2, "F7/c        Cycle between available color modes");
     mvwprintw(help_win, 19, 2, "F8/C        Turn on/off message syntax highlighting");
-    mvwprintw(help_win, 20, 2, "F9/l        Turn on/off resolved addresses");
-    mvwprintw(help_win, 21, 2, "9/0         Increase/Decrease raw preview size");
-    mvwprintw(help_win, 22, 2, "t           Toggle raw preview display");
-    mvwprintw(help_win, 23, 2, "T           Restore raw preview size");
-    mvwprintw(help_win, 24, 2, "D           Only show SDP messages");
+    mvwprintw(help_win, 20, 2, "F10/l       Link columns into a single flow step");
+    mvwprintw(help_win, 21, 2, "a           Toggle display aliases instead of IPs");
+    mvwprintw(help_win, 22, 2, "9/0         Increase/Decrease raw preview size");
+    mvwprintw(help_win, 23, 2, "t           Toggle raw preview display");
+    mvwprintw(help_win, 24, 2, "T           Restore raw preview size");
+    mvwprintw(help_win, 25, 2, "D           Only show SDP messages");
 
     // Press any key to close
     wgetch(help_win);
 
+    return 0;
+}
+
+int
+call_flow_link_columns_menu(ui_t *ui)
+{
+    call_flow_info_t *info;
+    call_flow_column_t *column;
+    WINDOW *menu_win;
+    int height, width, rows_per_page;
+    int col_count, i, key;
+    int cursor = 0;
+    int selected = -1;
+    int scroll_offset = 0;
+    char **labels;
+    int *suggested;
+    vector_iter_t columns;
+
+    if (!(info = call_flow_info(ui)))
+        return -1;
+
+    /* Ensure columns exist for the current group */
+    if (vector_count(info->columns) == 0)
+        call_flow_draw_columns(ui);
+
+    col_count = vector_count(info->columns);
+    if (col_count < 2) {
+        dialog_run("Need at least two columns to link.");
+        return -1;
+    }
+
+    labels = sng_malloc(sizeof(char *) * col_count);
+    suggested = sng_malloc(sizeof(int) * col_count);
+
+    columns = vector_iterator(info->columns);
+    i = 0;
+    while ((column = vector_iterator_next(&columns))) {
+        labels[i] = sng_malloc(MAX_SETTING_LEN);
+        call_flow_column_label(column, labels[i], MAX_SETTING_LEN);
+        i++;
+    }
+
+    call_flow_link_mark_suggestions(info, suggested, col_count);
+
+    height = col_count + 9;
+    width = 72;
+    if (height > LINES - 4)
+        height = LINES - 4;
+    if (width > COLS - 4)
+        width = COLS - 4;
+    rows_per_page = height - 8;
+    if (rows_per_page < 3)
+        rows_per_page = 3;
+
+    menu_win = newwin(height, width, (LINES - height) / 2, (COLS - width) / 2);
+    keypad(menu_win, TRUE);
+
+    for (;;) {
+        int visible_end;
+        werase(menu_win);
+        box(menu_win, 0, 0);
+        mvwprintw(menu_win, 1, width / 2 - 9, "Link Flow Columns");
+        mvwhline(menu_win, 2, 1, ACS_HLINE, width - 2);
+
+        wattron(menu_win, COLOR_PAIR(CP_CYAN_ON_DEF));
+        mvwprintw(menu_win, 3, 2, "Select two steps to render as one column.");
+        mvwprintw(menu_win, 4, 2, "* = suggested (adjacent, no messages between)");
+        wattroff(menu_win, COLOR_PAIR(CP_CYAN_ON_DEF));
+
+        if (cursor < scroll_offset)
+            scroll_offset = cursor;
+        if (cursor >= scroll_offset + rows_per_page)
+            scroll_offset = cursor - rows_per_page + 1;
+
+        visible_end = scroll_offset + rows_per_page;
+        if (visible_end > col_count)
+            visible_end = col_count;
+
+        for (i = scroll_offset; i < visible_end; i++) {
+            int row = 5 + (i - scroll_offset);
+            call_flow_column_t *col = vector_item(info->columns, i);
+            char mark = ' ';
+            char link_note[32] = "";
+
+            if (suggested[i])
+                mark = '*';
+
+            /* Show existing links against later partners */
+            {
+                int j;
+                for (j = 0; j < col_count; j++) {
+                    call_flow_column_t *other = vector_item(info->columns, j);
+                    if (j != i && call_flow_addr_pair_linked(info, col->addr, other->addr)) {
+                        snprintf(link_note, sizeof(link_note), " [linked:%d]", j + 1);
+                        break;
+                    }
+                }
+            }
+
+            if (i == cursor)
+                wattron(menu_win, A_REVERSE);
+            else if (i == selected)
+                wattron(menu_win, A_BOLD | COLOR_PAIR(CP_YELLOW_ON_DEF));
+
+            mvwprintw(menu_win, row, 2, "%c %2d. %-40s%s",
+                      mark, i + 1, labels[i], link_note);
+
+            wattroff(menu_win, A_REVERSE | A_BOLD | COLOR_PAIR(CP_YELLOW_ON_DEF));
+        }
+
+        mvwhline(menu_win, height - 3, 1, ACS_HLINE, width - 2);
+        if (selected < 0) {
+            mvwprintw(menu_win, height - 2, 2,
+                      "Space/Enter=select first  |  s=accept suggestion  |  Esc=close");
+        } else {
+            mvwprintw(menu_win, height - 2, 2,
+                      "First: %d  |  Space/Enter=link second  |  u=clear selection  |  Esc=close",
+                      selected + 1);
+        }
+
+        wrefresh(menu_win);
+        key = wgetch(menu_win);
+
+        if (key == KEY_ESC || key == 'q' || key == 'Q')
+            break;
+
+        if (key == KEY_UP || key == 'k') {
+            if (cursor > 0)
+                cursor--;
+            continue;
+        }
+        if (key == KEY_DOWN || key == 'j') {
+            if (cursor < col_count - 1)
+                cursor++;
+            continue;
+        }
+        if (key == KEY_PPAGE) {
+            cursor -= rows_per_page;
+            if (cursor < 0)
+                cursor = 0;
+            continue;
+        }
+        if (key == KEY_NPAGE) {
+            cursor += rows_per_page;
+            if (cursor >= col_count)
+                cursor = col_count - 1;
+            continue;
+        }
+
+        /* Accept first suggested adjacent pair */
+        if (key == 's' || key == 'S') {
+            for (i = 0; i < col_count - 1; i++) {
+                call_flow_column_t *a = vector_item(info->columns, i);
+                call_flow_column_t *b = vector_item(info->columns, i + 1);
+                if (!call_flow_columns_have_messages(info, a, b) &&
+                    !call_flow_addr_pair_linked(info, a->addr, b->addr)) {
+                    call_flow_link_t *link = sng_malloc(sizeof(call_flow_link_t));
+                    link->addr1 = a->addr;
+                    link->addr2 = b->addr;
+                    vector_append(info->column_links, link);
+                    call_flow_link_mark_suggestions(info, suggested, col_count);
+                    break;
+                }
+            }
+            selected = -1;
+            continue;
+        }
+
+        if (key == 'u' || key == 'U') {
+            if (selected >= 0) {
+                selected = -1;
+            } else if (cursor >= 0) {
+                /* Unlink cursor column from any partners */
+                call_flow_column_t *col = vector_item(info->columns, cursor);
+                vector_iter_t lit = vector_iterator(info->column_links);
+                call_flow_link_t *link;
+                vector_t *to_remove = vector_create(0, 1);
+                while ((link = vector_iterator_next(&lit))) {
+                    if (addressport_equals(link->addr1, col->addr) ||
+                        addressport_equals(link->addr2, col->addr)) {
+                        vector_append(to_remove, link);
+                    }
+                }
+                lit = vector_iterator(to_remove);
+                while ((link = vector_iterator_next(&lit)))
+                    vector_remove(info->column_links, link);
+                vector_destroy(to_remove);
+                call_flow_link_mark_suggestions(info, suggested, col_count);
+            }
+            continue;
+        }
+
+        if (key == KEY_SPACE || key == KEY_INTRO || key == '\n' || key == '\r') {
+            if (selected < 0) {
+                selected = cursor;
+            } else if (selected == cursor) {
+                selected = -1;
+            } else {
+                call_flow_column_t *a = vector_item(info->columns, selected);
+                call_flow_column_t *b = vector_item(info->columns, cursor);
+
+                if (call_flow_addr_pair_linked(info, a->addr, b->addr)) {
+                    /* Toggle: remove existing link */
+                    vector_iter_t lit = vector_iterator(info->column_links);
+                    call_flow_link_t *link;
+                    while ((link = vector_iterator_next(&lit))) {
+                        if ((addressport_equals(link->addr1, a->addr) &&
+                             addressport_equals(link->addr2, b->addr)) ||
+                            (addressport_equals(link->addr1, b->addr) &&
+                             addressport_equals(link->addr2, a->addr))) {
+                            vector_remove(info->column_links, link);
+                            break;
+                        }
+                    }
+                } else {
+                    call_flow_link_t *link = sng_malloc(sizeof(call_flow_link_t));
+                    link->addr1 = a->addr;
+                    link->addr2 = b->addr;
+                    vector_append(info->column_links, link);
+                }
+
+                call_flow_link_mark_suggestions(info, suggested, col_count);
+                selected = -1;
+            }
+            continue;
+        }
+    }
+
+    delwin(menu_win);
+
+    for (i = 0; i < col_count; i++)
+        sng_free(labels[i]);
+    sng_free(labels);
+    sng_free(suggested);
+
+    /* Force column/arrow positions to refresh */
+    ui->changed = true;
+    call_flow_draw(ui);
     return 0;
 }
 
@@ -1714,6 +2131,10 @@ call_flow_set_group(sip_call_group_t *group)
 
     if (!(info = call_flow_info(ui)))
         return -1;
+
+    /* Drop links when switching to a different call group */
+    if (info->group != group)
+        vector_clear(info->column_links);
 
     vector_clear(info->columns);
     vector_clear(info->arrows);
