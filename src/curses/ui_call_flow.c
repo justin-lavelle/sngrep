@@ -204,44 +204,177 @@ call_flow_apply_suggested_links(call_flow_info_t *info)
 }
 
 /**
- * Remove links that match the current suggestion rule (adjacent, no messages)
+ * Leave linked compress mode so suggestion links are not re-applied on draw
  */
 static void
-call_flow_clear_suggested_links(call_flow_info_t *info)
+call_flow_disable_linked_mode(void)
 {
-    int i, n;
-    vector_iter_t lit;
-    call_flow_link_t *link;
-    vector_t *to_remove;
+    if (setting_has_value(SETTING_CF_SPLITCALLID, "linked"))
+        setting_set_value(SETTING_CF_SPLITCALLID, SETTING_OFF);
+}
 
-    if (!info || !info->column_links)
+//! Max ports aggregated under one IP in a linked header
+#define CF_LINK_MAX_PORTS 16
+//! Max distinct IPs shown in a linked column header
+#define CF_LINK_MAX_IPS   8
+//! Default separator line width under a column header
+#define CF_COL_SEP_WIDTH  20
+
+/**
+ * Print a column header label centered on the vertical guide
+ */
+static void
+call_flow_print_centered_label(WINDOW *win, int line, int vline_x, const char *text)
+{
+    int len;
+    int x;
+
+    if (!text)
         return;
 
-    n = vector_count(info->columns);
-    to_remove = vector_create(0, 1);
+    len = (int) strlen(text);
+    x = vline_x - len / 2;
+    if (x < 0)
+        x = 0;
+    mvwprintw(win, line, x, "%s", text);
+}
 
-    lit = vector_iterator(info->column_links);
-    while ((link = vector_iterator_next(&lit))) {
-        int idx1 = -1, idx2 = -1;
-        for (i = 0; i < n; i++) {
-            call_flow_column_t *col = vector_item(info->columns, i);
-            if (addressport_equals(col->addr, link->addr1))
-                idx1 = i;
-            if (addressport_equals(col->addr, link->addr2))
-                idx2 = i;
+/**
+ * One IP with one or more ports for a linked column header
+ */
+struct call_flow_link_header_ip {
+    char ip[ADDRESSLEN];
+    char label[MAX_SETTING_LEN];
+    uint16_t ports[CF_LINK_MAX_PORTS];
+    int port_count;
+};
+
+/**
+ * Count how many columns share a display position
+ */
+static int
+call_flow_disppos_count(call_flow_info_t *info, int disppos)
+{
+    int count = 0;
+    vector_iter_t it = vector_iterator(info->columns);
+    call_flow_column_t *col;
+
+    while ((col = vector_iterator_next(&it))) {
+        if (col->disppos == disppos)
+            count++;
+    }
+    return count;
+}
+
+/**
+ * Build stacked header lines for all columns sharing disppos.
+ * Same IP merges ports as ip:port1|port2; different IPs are separate lines.
+ * @return number of header lines written into lines[]
+ */
+static int
+call_flow_linked_header_lines(call_flow_info_t *info, int disppos,
+                              char lines[][MAX_SETTING_LEN], int max_lines)
+{
+    struct call_flow_link_header_ip ips[CF_LINK_MAX_IPS];
+    int ip_count = 0;
+    int i, j;
+    vector_iter_t it;
+    call_flow_column_t *col;
+
+    memset(ips, 0, sizeof(ips));
+
+    it = vector_iterator(info->columns);
+    while ((col = vector_iterator_next(&it))) {
+        int ip_idx = -1;
+
+        if (col->disppos != disppos)
+            continue;
+
+        for (i = 0; i < ip_count; i++) {
+            if (!strcmp(ips[i].ip, col->addr.ip)) {
+                ip_idx = i;
+                break;
+            }
         }
-        if (idx1 >= 0 && idx2 >= 0 && abs(idx1 - idx2) == 1) {
-            call_flow_column_t *a = vector_item(info->columns, idx1);
-            call_flow_column_t *b = vector_item(info->columns, idx2);
-            if (!call_flow_columns_have_messages(info, a, b))
-                vector_append(to_remove, link);
+
+        if (ip_idx < 0) {
+            if (ip_count >= CF_LINK_MAX_IPS || ip_count >= max_lines)
+                continue;
+            ip_idx = ip_count++;
+            sng_strncpy(ips[ip_idx].ip, col->addr.ip, sizeof(ips[ip_idx].ip));
+            if (setting_enabled(SETTING_DISPLAY_ALIAS))
+                sng_strncpy(ips[ip_idx].label, get_alias_value(col->addr.ip),
+                            sizeof(ips[ip_idx].label));
+            else
+                sng_strncpy(ips[ip_idx].label, col->addr.ip, sizeof(ips[ip_idx].label));
+        }
+
+        if (!col->addr.port)
+            continue;
+
+        for (j = 0; j < ips[ip_idx].port_count; j++) {
+            if (ips[ip_idx].ports[j] == col->addr.port)
+                break;
+        }
+        if (j == ips[ip_idx].port_count && ips[ip_idx].port_count < CF_LINK_MAX_PORTS)
+            ips[ip_idx].ports[ips[ip_idx].port_count++] = col->addr.port;
+    }
+
+    for (i = 0; i < ip_count; i++) {
+        char portbuf[MAX_SETTING_LEN];
+        size_t plen = 0;
+        portbuf[0] = '\0';
+
+        for (j = 0; j < ips[i].port_count; j++) {
+            plen += snprintf(portbuf + plen, sizeof(portbuf) - plen, "%s%u",
+                             j ? "|" : "", ips[i].ports[j]);
+            if (plen >= sizeof(portbuf))
+                break;
+        }
+
+        if (ips[i].port_count > 0) {
+            snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", ips[i].label, portbuf);
+        } else {
+            snprintf(lines[i], MAX_SETTING_LEN, "%s", ips[i].label);
         }
     }
 
-    lit = vector_iterator(to_remove);
-    while ((link = vector_iterator_next(&lit)))
-        vector_remove(info->column_links, link);
-    vector_destroy(to_remove);
+    return ip_count;
+}
+
+/**
+ * Draw a vertical column guide; double-line for linked columns
+ */
+static void
+call_flow_draw_column_vline(WINDOW *win, int y, int x, int height, int linked)
+{
+    int row;
+
+    if (!linked) {
+        mvwvline(win, y, x, ACS_VLINE, height);
+        return;
+    }
+
+    for (row = 0; row < height; row++)
+        mvwprintw(win, y + row, x, "║");
+}
+
+/**
+ * Place flow window under the multi-line column header area
+ */
+static void
+call_flow_layout_flow_win(ui_t *ui, call_flow_info_t *info)
+{
+    int header_rows = info->header_rows > 0 ? info->header_rows : 1;
+    int flow_start = 3 + header_rows;
+    int flow_height = ui->height - flow_start - 2;
+
+    if (flow_height < 1)
+        flow_height = 1;
+
+    wresize(info->flow_win, flow_height, ui->width - 2);
+    mvwin(info->flow_win, flow_start, 0);
+    info->scroll = ui_set_scrollbar(info->flow_win, SB_VERTICAL, SB_LEFT);
 }
 
 /**
@@ -311,6 +444,7 @@ call_flow_create(ui_t *ui)
 
     // Display timestamp next to each arrow
     info->arrowtime = true;
+    info->header_rows = 1;
 
     // Calculate available printable area for messages
     info->flow_win = subwin(ui->win, ui->height - 6, ui->width - 2, 4, 0);
@@ -374,8 +508,8 @@ call_flow_redraw(ui_t *ui)
     ui->width = maxx;
     ui->height = maxy;
 
-    // Calculate available printable area
-    wresize(info->flow_win, maxy - 6, maxx);
+    // Recalculate flow window under the header area
+    call_flow_layout_flow_win(ui, info);
 
     // Force flow redraw
     call_flow_draw(ui);
@@ -519,8 +653,29 @@ call_flow_draw_columns(ui_t *ui)
     if (setting_has_value(SETTING_CF_SPLITCALLID, "linked"))
         call_flow_apply_suggested_links(info);
     call_flow_columns_assign_disppos(info);
+
+    /* Determine how many stacked address rows the tallest linked column needs */
+    info->header_rows = 1;
     columns = vector_iterator(info->columns);
     while ((column = vector_iterator_next(&columns))) {
+        char lines[CF_LINK_MAX_IPS][MAX_SETTING_LEN];
+        int rows;
+
+        if (call_flow_disppos_count(info, column->disppos) <= 1)
+            continue;
+        rows = call_flow_linked_header_lines(info, column->disppos, lines, CF_LINK_MAX_IPS);
+        if (rows > info->header_rows)
+            info->header_rows = rows;
+    }
+    call_flow_layout_flow_win(ui, info);
+
+    columns = vector_iterator(info->columns);
+    while ((column = vector_iterator_next(&columns))) {
+        int linked;
+        int sep_line;
+        int label_base;
+        int vline_x;
+
         // Only draw one vertical line / header per display position
         if (column->colpos > 0) {
             call_flow_column_t *prev;
@@ -538,9 +693,13 @@ call_flow_draw_columns(ui_t *ui)
                 continue;
         }
 
-        mvwvline(info->flow_win, 0, 20 + 30 * column->disppos, ACS_VLINE, ui->height - 6);
-        mvwhline(ui->win, 3, 10 + 30 * column->disppos, ACS_HLINE, 20);
-        mvwaddch(ui->win, 3, 20 + 30 * column->disppos, ACS_TTEE);
+        linked = call_flow_disppos_count(info, column->disppos) > 1;
+        sep_line = 2 + info->header_rows;
+        label_base = sep_line - info->header_rows;
+        vline_x = 20 + 30 * column->disppos;
+
+        call_flow_draw_column_vline(info->flow_win, 0, vline_x,
+                                    getmaxy(info->flow_win), linked);
 
         // Set bold to this address if it's local
         if (setting_enabled(SETTING_CF_LOCALHIGHLIGHT)) {
@@ -548,27 +707,62 @@ call_flow_draw_columns(ui_t *ui)
                 wattron(ui->win, A_BOLD);
         }
 
-        if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
-            snprintf(coltext, MAX_SETTING_LEN, "%s", column->alias);
-        } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
-            if (strlen(column->alias) > 15) {
-                snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
-                         MAX_SETTING_LEN - 9, column->alias + strlen(column->alias) - 13, column->addr.port);
-            } else {
-                snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
-                         MAX_SETTING_LEN - 7, column->alias, column->addr.port);
-            }
-        } else {
-            if (strlen(column->addr.ip) > 15) {
-                snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
-                         MAX_SETTING_LEN - 9, column->addr.ip + strlen(column->addr.ip) - 13, column->addr.port);
-            } else {
-                snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
-                         MAX_SETTING_LEN - 7, column->addr.ip, column->addr.port);
-            }
-        }
+        if (linked) {
+            char lines[CF_LINK_MAX_IPS][MAX_SETTING_LEN];
+            int rows = call_flow_linked_header_lines(info, column->disppos, lines, CF_LINK_MAX_IPS);
+            int row;
+            int max_len = 0;
+            int sep_width, sep_x;
 
-        mvwprintw(ui->win, 2, 10 + 30 * column->disppos + (22 - strlen(coltext)) / 2, "%s", coltext);
+            /* Bottom-align stacked labels, each centered on the column guide */
+            for (row = 0; row < rows; row++) {
+                int len = (int) strlen(lines[row]);
+                if (len > max_len)
+                    max_len = len;
+                call_flow_print_centered_label(ui->win, sep_line - rows + row,
+                                               vline_x, lines[row]);
+            }
+
+            sep_width = max_len > CF_COL_SEP_WIDTH ? max_len : CF_COL_SEP_WIDTH;
+            if (sep_width % 2 == 0)
+                sep_width++; /* keep an odd width so the tee sits on center */
+            sep_x = vline_x - sep_width / 2;
+            if (sep_x < 0) {
+                sep_width += sep_x;
+                sep_x = 0;
+            }
+            mvwhline(ui->win, sep_line, sep_x, ACS_HLINE, sep_width);
+            mvwprintw(ui->win, sep_line, vline_x, "╥");
+        } else {
+            int sep_x = vline_x - CF_COL_SEP_WIDTH / 2;
+
+            if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
+                snprintf(coltext, MAX_SETTING_LEN, "%s", column->alias);
+            } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
+                if (strlen(column->alias) > 15) {
+                    snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
+                             MAX_SETTING_LEN - 9, column->alias + strlen(column->alias) - 13,
+                             column->addr.port);
+                } else {
+                    snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
+                             MAX_SETTING_LEN - 7, column->alias, column->addr.port);
+                }
+            } else {
+                if (strlen(column->addr.ip) > 15) {
+                    snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
+                             MAX_SETTING_LEN - 9, column->addr.ip + strlen(column->addr.ip) - 13,
+                             column->addr.port);
+                } else {
+                    snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
+                             MAX_SETTING_LEN - 7, column->addr.ip, column->addr.port);
+                }
+            }
+
+            call_flow_print_centered_label(ui->win, label_base + info->header_rows - 1,
+                                           vline_x, coltext);
+            mvwhline(ui->win, sep_line, sep_x, ACS_HLINE, CF_COL_SEP_WIDTH);
+            mvwaddch(ui->win, sep_line, vline_x, ACS_TTEE);
+        }
         wattroff(ui->win, A_BOLD);
     }
 
@@ -1823,22 +2017,12 @@ call_flow_handle_key(ui_t *ui, int key)
             case ACTION_TOGGLE_RAW:
                 setting_toggle(SETTING_CF_FORCERAW);
                 break;
-            case ACTION_COMPRESS: {
-                const char *prev = setting_get_value(SETTING_CF_SPLITCALLID);
-
+            case ACTION_COMPRESS:
                 setting_toggle(SETTING_CF_SPLITCALLID);
-
-                /* Leaving linked mode: drop auto-accepted suggestion links */
-                if (prev && !strcmp(prev, "linked")) {
-                    if (vector_count(info->columns) == 0)
-                        call_flow_draw_columns(ui);
-                    call_flow_clear_suggested_links(info);
-                }
-
-                /* Force columns reload; linked suggestions re-applied on draw */
+                /* Reset links on every cycle; linked mode re-applies on draw */
+                vector_clear(info->column_links);
                 call_flow_set_group(info->group);
                 break;
-            }
             case ACTION_SAVE:
                 if (capture_sources_count() > 1) {
                     dialog_run("Saving is not possible when multiple input sources are specified.");
@@ -2141,9 +2325,13 @@ call_flow_link_columns_menu(ui_t *ui)
                         vector_append(to_remove, link);
                     }
                 }
-                lit = vector_iterator(to_remove);
-                while ((link = vector_iterator_next(&lit)))
-                    vector_remove(info->column_links, link);
+                if (vector_count(to_remove) > 0) {
+                    lit = vector_iterator(to_remove);
+                    while ((link = vector_iterator_next(&lit)))
+                        vector_remove(info->column_links, link);
+                    /* Stop linked compress mode from re-applying suggestions */
+                    call_flow_disable_linked_mode();
+                }
                 vector_destroy(to_remove);
                 call_flow_link_mark_suggestions(info, suggested, col_count);
             }
@@ -2172,6 +2360,8 @@ call_flow_link_columns_menu(ui_t *ui)
                             break;
                         }
                     }
+                    /* Stop linked compress mode from re-applying suggestions */
+                    call_flow_disable_linked_mode();
                 } else {
                     call_flow_link_t *link = sng_malloc(sizeof(call_flow_link_t));
                     link->addr1 = a->addr;

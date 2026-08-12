@@ -179,6 +179,8 @@ struct call_flow_info {
     bool arrowtime;
     //! Linked column address pairs (call_flow_link_t *)
     vector_t *column_links;
+    //! Number of address label rows above the column separator
+    int header_rows;
 };
 
 /**
