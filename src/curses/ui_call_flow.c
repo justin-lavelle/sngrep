@@ -179,6 +179,72 @@ call_flow_link_mark_suggestions(call_flow_info_t *info, int *suggested, int col_
 }
 
 /**
+ * Auto-accept all suggested adjacent column links into column_links
+ */
+static void
+call_flow_apply_suggested_links(call_flow_info_t *info)
+{
+    int i, n;
+
+    if (!info || !info->column_links)
+        return;
+
+    n = vector_count(info->columns);
+    for (i = 0; i < n - 1; i++) {
+        call_flow_column_t *a = vector_item(info->columns, i);
+        call_flow_column_t *b = vector_item(info->columns, i + 1);
+        if (!call_flow_columns_have_messages(info, a, b) &&
+            !call_flow_addr_pair_linked(info, a->addr, b->addr)) {
+            call_flow_link_t *link = sng_malloc(sizeof(call_flow_link_t));
+            link->addr1 = a->addr;
+            link->addr2 = b->addr;
+            vector_append(info->column_links, link);
+        }
+    }
+}
+
+/**
+ * Remove links that match the current suggestion rule (adjacent, no messages)
+ */
+static void
+call_flow_clear_suggested_links(call_flow_info_t *info)
+{
+    int i, n;
+    vector_iter_t lit;
+    call_flow_link_t *link;
+    vector_t *to_remove;
+
+    if (!info || !info->column_links)
+        return;
+
+    n = vector_count(info->columns);
+    to_remove = vector_create(0, 1);
+
+    lit = vector_iterator(info->column_links);
+    while ((link = vector_iterator_next(&lit))) {
+        int idx1 = -1, idx2 = -1;
+        for (i = 0; i < n; i++) {
+            call_flow_column_t *col = vector_item(info->columns, i);
+            if (addressport_equals(col->addr, link->addr1))
+                idx1 = i;
+            if (addressport_equals(col->addr, link->addr2))
+                idx2 = i;
+        }
+        if (idx1 >= 0 && idx2 >= 0 && abs(idx1 - idx2) == 1) {
+            call_flow_column_t *a = vector_item(info->columns, idx1);
+            call_flow_column_t *b = vector_item(info->columns, idx2);
+            if (!call_flow_columns_have_messages(info, a, b))
+                vector_append(to_remove, link);
+        }
+    }
+
+    lit = vector_iterator(to_remove);
+    while ((link = vector_iterator_next(&lit)))
+        vector_remove(info->column_links, link);
+    vector_destroy(to_remove);
+}
+
+/**
  * Format column label as used in the flow header / link menu
  */
 static void
@@ -450,6 +516,8 @@ call_flow_draw_columns(ui_t *ui)
     }
 
     // Draw columns
+    if (setting_has_value(SETTING_CF_SPLITCALLID, "linked"))
+        call_flow_apply_suggested_links(info);
     call_flow_columns_assign_disppos(info);
     columns = vector_iterator(info->columns);
     while ((column = vector_iterator_next(&columns))) {
@@ -1755,11 +1823,22 @@ call_flow_handle_key(ui_t *ui, int key)
             case ACTION_TOGGLE_RAW:
                 setting_toggle(SETTING_CF_FORCERAW);
                 break;
-            case ACTION_COMPRESS:
+            case ACTION_COMPRESS: {
+                const char *prev = setting_get_value(SETTING_CF_SPLITCALLID);
+
                 setting_toggle(SETTING_CF_SPLITCALLID);
-                // Force columns reload
+
+                /* Leaving linked mode: drop auto-accepted suggestion links */
+                if (prev && !strcmp(prev, "linked")) {
+                    if (vector_count(info->columns) == 0)
+                        call_flow_draw_columns(ui);
+                    call_flow_clear_suggested_links(info);
+                }
+
+                /* Force columns reload; linked suggestions re-applied on draw */
                 call_flow_set_group(info->group);
                 break;
+            }
             case ACTION_SAVE:
                 if (capture_sources_count() > 1) {
                     dialog_run("Saving is not possible when multiple input sources are specified.");
@@ -1865,7 +1944,7 @@ call_flow_help(ui_t *ui)
     mvwprintw(help_win, 13, 2, "F2/d        Toggle SDP Address:Port info");
     mvwprintw(help_win, 14, 2, "F3/m        Toggle RTP arrows display");
     mvwprintw(help_win, 15, 2, "F4/X        Show call-flow with X-CID/X-Call-ID dialog");
-    mvwprintw(help_win, 16, 2, "F5/s        Toggle compressed view (One address <=> one column");
+    mvwprintw(help_win, 16, 2, "s           Cycle compress: off / same-addr / linked");
     mvwprintw(help_win, 17, 2, "F6/R        Show original call messages in raw mode");
     mvwprintw(help_win, 18, 2, "F7/c        Cycle between available color modes");
     mvwprintw(help_win, 19, 2, "F8/C        Turn on/off message syntax highlighting");
