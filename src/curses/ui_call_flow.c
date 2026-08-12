@@ -2207,7 +2207,7 @@ call_flow_link_columns_menu(ui_t *ui)
         mvwhline(menu_win, 2, 1, ACS_HLINE, width - 2);
 
         wattron(menu_win, COLOR_PAIR(CP_CYAN_ON_DEF));
-        mvwprintw(menu_win, 3, 2, "Select two steps to render as one column.");
+        mvwprintw(menu_win, 3, 2, "Select columns to link and display together.");
         mvwprintw(menu_win, 4, 2, "* = suggested (adjacent, no messages between)");
         wattroff(menu_win, COLOR_PAIR(CP_CYAN_ON_DEF));
 
@@ -2253,13 +2253,12 @@ call_flow_link_columns_menu(ui_t *ui)
         }
 
         mvwhline(menu_win, height - 3, 1, ACS_HLINE, width - 2);
-        if (selected < 0) {
+        if (selected > 0) {
             mvwprintw(menu_win, height - 2, 2,
-                      "Space/Enter=select first  |  s=accept suggestion  |  Esc=close");
+                      "Space/Enter=select to link | s=auto link | u=unselect | Esc=close");
         } else {
             mvwprintw(menu_win, height - 2, 2,
-                      "First: %d  |  Space/Enter=link second  |  u=clear selection  |  Esc=close",
-                      selected + 1);
+                      "Space/Enter=select | u=unlink | Esc=close");
         }
 
         wrefresh(menu_win);
