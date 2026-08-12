@@ -164,6 +164,8 @@ struct call_flow_info {
     int maxcallids;
     //! Print timestamp next to the arrow
     bool arrowtime;
+    //! Linked columns (pairs of indices stored as 2 ints per entry)
+    vector_t *linked_columns;
 };
 
 /**
@@ -529,5 +531,17 @@ call_flow_arrow_sorter(vector_t *vector, void *item);
  */
 int
 call_flow_arrow_filter(void *item);
+
+/**
+ * @brief Show alias linking menu to merge columns
+ *
+ * Interactive menu that lists all endpoints and allows user
+ * to select two to link together (rendered as one column).
+ *
+ * @param ui UI structure pointer
+ * @return 0 on success, -1 on failure
+ */
+int
+call_flow_link_alias_menu(ui_t *ui);
 
 #endif /* __SNGREP_UI_CALL_FLOW_H */
