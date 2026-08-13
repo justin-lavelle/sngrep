@@ -57,7 +57,7 @@ key_binding_t bindings[ACTION_SENTINEL] = {
    { ACTION_CLEAR_CALLS,    "clearcalls",   { KEY_F(5), KEY_CTRL('L')}, 2 },
    { ACTION_CLEAR_CALLS_SOFT, "clearcallssoft", {KEY_F(9)}, 2 },
    { ACTION_TOGGLE_SYNTAX,  "togglesyntax", { KEY_F(8), 'C' }, 2 },
-   { ACTION_CYCLE_COLOR,    "colormode",    { 'c' }, 1 },
+   { ACTION_CYCLE_COLOR,    "colormode",    { KEY_F(7), 'c' }, 2 },
    { ACTION_COMPRESS,       "compress",     { 's' }, 1 },
    { ACTION_SHOW_ALIAS,     "togglealias",  { 'a' }, 1 },
    { ACTION_TOGGLE_PAUSE,   "pause",        { 'p' }, 1 },

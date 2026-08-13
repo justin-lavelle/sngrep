@@ -277,6 +277,71 @@ call_flow_transport_str(int transport)
 }
 
 /**
+ * Color pair for a SIP transport protocol label
+ */
+static int
+call_flow_protocol_color(int transport)
+{
+    /* Default / cycled-back mode: light gray for all protocols */
+    if (!setting_has_value(SETTING_CF_PROTOCOL_COLOR, "proto"))
+        return CP_PROTO_GRAY_ON_DEF;
+
+    switch (transport) {
+        case PACKET_SIP_UDP:
+            return CP_PROTO_UDP_ON_DEF;
+        case PACKET_SIP_TCP:
+            return CP_PROTO_TCP_ON_DEF;
+        case PACKET_SIP_TLS:
+            return CP_PROTO_TLS_ON_DEF;
+        case PACKET_SIP_WS:
+            return CP_PROTO_WS_ON_DEF;
+        case PACKET_SIP_WSS:
+            return CP_PROTO_WSS_ON_DEF;
+        default:
+            return CP_PROTO_GRAY_ON_DEF;
+    }
+}
+
+/**
+ * Draw "(proto)" at x,y. Only the name inside parentheses uses protocol color.
+ * @return printed width, or 0 if protocol display is off / unknown
+ */
+static int
+call_flow_print_protocol_label(WINDOW *win, int y, int x, int transport,
+                               int arrow_color, int bright)
+{
+    const char *proto;
+    int cp, plen;
+    attr_t attrs;
+    short pair;
+
+    if (!setting_enabled(SETTING_CF_PROTOCOL))
+        return 0;
+
+    proto = call_flow_transport_str(transport);
+    if (!proto[0])
+        return 0;
+
+    cp = call_flow_protocol_color(transport);
+    plen = (int) strlen(proto);
+
+    /* Keep current arrow attrs for '(' */
+    mvwaddch(win, y, x, '(');
+
+    /* Protocol name uses dedicated color; bold when arrow is selected */
+    wattr_get(win, &attrs, &pair, NULL);
+    wattrset(win, COLOR_PAIR(cp) | (bright ? A_BOLD : A_NORMAL));
+    mvwprintw(win, y, x + 1, "%s", proto);
+    wattr_set(win, attrs, pair, NULL);
+
+    mvwaddch(win, y, x + 1 + plen, ')');
+    /* Ensure arrow color remains active for following tip characters */
+    wattron(win, COLOR_PAIR(arrow_color));
+
+    return plen + 2;
+}
+
+/**
  * Count how many columns share a display position
  */
 static int
@@ -990,7 +1055,9 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
     int distance = abs(endpos - startpos) - 3;
 
     // Highlight current message
+    int bright = 0;
     if (arrow == vector_item(info->darrows, info->cur_arrow)) {
+        bright = 1;
         if (setting_has_value(SETTING_CF_HIGHTLIGHT, "reverse")) {
             wattron(flow_win, A_REVERSE);
         }
@@ -1072,27 +1139,17 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
             mvwaddch(flow_win, aline - 1, startpos + 3, ACS_URCORNER);
             mvwaddch(flow_win, aline - 1, startpos + 2, ACS_HLINE);
         }
-        if (setting_enabled(SETTING_CF_PROTOCOL)) {
-            const char *proto = call_flow_transport_str(msg->packet->type);
-            if (proto[0]) {
-                char protostr[16];
-                int tip = msg->retrans ? 5 : 3;
-                snprintf(protostr, sizeof(protostr), "(%s)", proto);
-                mvwprintw(flow_win, aline, startpos + tip, "%s", protostr);
-            }
-        }
+        call_flow_print_protocol_label(flow_win, aline, startpos + (msg->retrans ? 5 : 3),
+                                       msg->packet->type, color, bright);
     } else if (arrow->dir == CF_ARROW_RIGHT) {
         if (setting_enabled(SETTING_CF_PROTOCOL)) {
             const char *proto = call_flow_transport_str(msg->packet->type);
             if (proto[0]) {
-                char protostr[16];
-                int plen, tip;
-
-                snprintf(protostr, sizeof(protostr), "(%s)", proto);
-                plen = (int) strlen(protostr);
-                tip = msg->retrans ? 4 : 2;
+                int plen = (int) strlen(proto) + 2;
+                int tip = msg->retrans ? 4 : 2;
                 if (endpos - tip - plen > startpos + 2)
-                    mvwprintw(flow_win, aline, endpos - tip - plen, "%s", protostr);
+                    call_flow_print_protocol_label(flow_win, aline, endpos - tip - plen,
+                                                   msg->packet->type, color, bright);
             }
         }
         mvwaddch(flow_win, aline, endpos - 2, '>');
@@ -1109,11 +1166,10 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
         if (setting_enabled(SETTING_CF_PROTOCOL)) {
             const char *proto = call_flow_transport_str(msg->packet->type);
             if (proto[0]) {
-                char protostr[16];
                 int tip = msg->retrans ? 5 : 3;
-                snprintf(protostr, sizeof(protostr), "(%s)", proto);
-                if (startpos + tip + (int) strlen(protostr) < endpos - 2)
-                    mvwprintw(flow_win, aline, startpos + tip, "%s", protostr);
+                if (startpos + tip + (int) strlen(proto) + 2 < endpos - 2)
+                    call_flow_print_protocol_label(flow_win, aline, startpos + tip,
+                                                   msg->packet->type, color, bright);
             }
         }
     }
@@ -2062,6 +2118,13 @@ call_flow_handle_key(ui_t *ui, int key)
             case ACTION_SDP_INFO:
                 setting_toggle(SETTING_CF_SDP_INFO);
                 break;
+            case ACTION_CYCLE_COLOR:
+                /* With protocol labels on, F7/c cycles protocol color: gray <-> proto */
+                if (setting_enabled(SETTING_CF_PROTOCOL))
+                    setting_toggle(SETTING_CF_PROTOCOL_COLOR);
+                else
+                    setting_toggle(SETTING_COLORMODE);
+                break;
             case ACTION_ONLY_MEDIA:
                 setting_toggle(SETTING_CF_ONLYMEDIA);
                 call_flow_set_group(info->group);
@@ -2190,7 +2253,7 @@ call_flow_help(ui_t *ui)
     mvwprintw(help_win, 15, 2, "F4/X        Show call-flow with X-CID/X-Call-ID dialog");
     mvwprintw(help_win, 16, 2, "s           Cycle compress: off / same-addr / linked");
     mvwprintw(help_win, 17, 2, "F6/R        Show original call messages in raw mode");
-    mvwprintw(help_win, 18, 2, "F7/c        Cycle between available color modes");
+    mvwprintw(help_win, 18, 2, "F7/c        Cycle color mode / protocol label colors");
     mvwprintw(help_win, 19, 2, "F8/C        Turn on/off message syntax highlighting");
     mvwprintw(help_win, 20, 2, "F10/l       Link columns into a single flow step");
     mvwprintw(help_win, 21, 2, "a           Toggle display aliases instead of IPs");

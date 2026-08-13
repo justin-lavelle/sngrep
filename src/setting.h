@@ -62,6 +62,7 @@ typedef struct setting_option setting_t;
 #define SETTING_ENUM_HEPVERSION  (const char *[]){ "2", "3", NULL }
 #define SETTING_ENUM_MEDIA       (const char *[]){ "off", "on", "active", NULL }
 #define SETTING_ENUM_SPLITCALLID (const char *[]){ "off", "on", "linked", NULL }
+#define SETTING_ENUM_PROTOCOLOR  (const char *[]){ "gray", "proto", NULL }
 
 //! Other useful defines
 #define SETTING_ON  "on"
@@ -119,6 +120,7 @@ enum setting_id {
     SETTING_CF_ONLYMEDIA,
     SETTING_CF_DELTA,
     SETTING_CF_PROTOCOL,
+    SETTING_CF_PROTOCOL_COLOR,
     SETTING_CR_SCROLLSTEP,
     SETTING_CR_NON_ASCII,
     SETTING_FILTER_PAYLOAD,

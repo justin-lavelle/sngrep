@@ -74,6 +74,7 @@ settings_entry_t entries[] = {
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_SDPONLY,         SETTING_CF_SDP_INFO,        "Show SDP information in messages .........." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_DELTA,           SETTING_CF_DELTA,           "Show delta time between messages .........." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_PROTOCOL,        SETTING_CF_PROTOCOL,        "Show transport protocol on message arrows ." },
+    { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_PROTOCOL_COLOR,  SETTING_CF_PROTOCOL_COLOR,  "Protocol label color mode .................." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_MEDIA,           SETTING_CF_MEDIA,           "Show RTP media streams ...................." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_SCROLLSTEP,      SETTING_CF_SCROLLSTEP,      "Steps for PgUp/PgDown ....................." },
 #ifdef USE_EEP

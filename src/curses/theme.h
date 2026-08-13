@@ -51,7 +51,22 @@ enum sngrep_colors_pairs {
     CP_BLUE_ON_WHITE,
     CP_CYAN_ON_BLACK,
     CP_CYAN_ON_WHITE,
+    //! Transport protocol label colors (call flow arrows)
+    CP_PROTO_GRAY_ON_DEF,
+    CP_PROTO_UDP_ON_DEF,
+    CP_PROTO_TCP_ON_DEF,
+    CP_PROTO_TLS_ON_DEF,
+    CP_PROTO_WS_ON_DEF,
+    CP_PROTO_WSS_ON_DEF,
 };
+
+//! Custom ncurses color indexes for protocol RGB (when can_change_color)
+#define COLOR_PROTO_GRAY  15
+#define COLOR_PROTO_UDP   16
+#define COLOR_PROTO_TCP   17
+#define COLOR_PROTO_TLS   18
+#define COLOR_PROTO_WS    19
+#define COLOR_PROTO_WSS   20
 
 // Used to configure color pairs only with fg color
 #define COLOR_DEFAULT -1

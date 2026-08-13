@@ -142,6 +142,30 @@ ncurses_init()
     init_pair(CP_CYAN_ON_WHITE, COLOR_CYAN, COLOR_WHITE);
     init_pair(CP_CYAN_ON_BLACK, COLOR_CYAN, COLOR_BLACK);
 
+    /* Protocol label colors: prefer exact RGB when the terminal allows it */
+    if (can_change_color() && COLORS > COLOR_PROTO_WSS) {
+        /* gray #BDBDBD, UDP #00E5FF, TCP #00E676, TLS #FFC400, WS #80D8FF, WSS #EA80FC */
+        init_color(COLOR_PROTO_GRAY, 741, 741, 741);
+        init_color(COLOR_PROTO_UDP, 0, 898, 1000);
+        init_color(COLOR_PROTO_TCP, 0, 902, 463);
+        init_color(COLOR_PROTO_TLS, 1000, 769, 0);
+        init_color(COLOR_PROTO_WS, 502, 847, 1000);
+        init_color(COLOR_PROTO_WSS, 918, 502, 988);
+        init_pair(CP_PROTO_GRAY_ON_DEF, COLOR_PROTO_GRAY, bg);
+        init_pair(CP_PROTO_UDP_ON_DEF, COLOR_PROTO_UDP, bg);
+        init_pair(CP_PROTO_TCP_ON_DEF, COLOR_PROTO_TCP, bg);
+        init_pair(CP_PROTO_TLS_ON_DEF, COLOR_PROTO_TLS, bg);
+        init_pair(CP_PROTO_WS_ON_DEF, COLOR_PROTO_WS, bg);
+        init_pair(CP_PROTO_WSS_ON_DEF, COLOR_PROTO_WSS, bg);
+    } else {
+        init_pair(CP_PROTO_GRAY_ON_DEF, COLOR_WHITE, bg);
+        init_pair(CP_PROTO_UDP_ON_DEF, COLOR_CYAN, bg);
+        init_pair(CP_PROTO_TCP_ON_DEF, COLOR_GREEN, bg);
+        init_pair(CP_PROTO_TLS_ON_DEF, COLOR_YELLOW, bg);
+        init_pair(CP_PROTO_WS_ON_DEF, COLOR_BLUE, bg);
+        init_pair(CP_PROTO_WSS_ON_DEF, COLOR_MAGENTA, bg);
+    }
+
     return 0;
 }
 
