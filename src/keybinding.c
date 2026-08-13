@@ -91,6 +91,7 @@ key_binding_t bindings[ACTION_SENTINEL] = {
    { ACTION_SORT_SWAP,      "sortswap",     { 'z' }, 1 },
    { ACTION_TOGGLE_TIME,    "toggletime",   { 'w' }, 1 },
    { ACTION_LINK_COLUMNS,   "linkcolumns",  { KEY_F(10), 'l', 'L' }, 3 },
+   { ACTION_TOGGLE_PROTOCOL,"toggleprotocol", { 'p' }, 1 },
 };
 
 void

@@ -282,6 +282,19 @@ call_raw_handle_key(ui_t *ui, int key)
                     call_raw_set_msg(info->msg);
                 }
                 break;
+            case ACTION_TOGGLE_PROTOCOL:
+                setting_toggle(SETTING_CF_PROTOCOL);
+                // Create a new pad (forces messages draw)
+                delwin(info->pad);
+                info->pad = newpad(500, COLS);
+                info->last = NULL;
+                // Force refresh panel
+                if (info->group) {
+                    call_raw_set_group(info->group);
+                } else {
+                    call_raw_set_msg(info->msg);
+                }
+                break;
             default:
                 // Parse next action
                 continue;

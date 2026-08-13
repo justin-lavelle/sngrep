@@ -127,6 +127,8 @@ struct call_flow_column {
     address_t addr;
     //! Alias for the given address
     char alias[MAX_SETTING_LEN];
+    //! Transport protocol for this column @see packet_type
+    int transport;
     //! Call Ids
     vector_t *callids;
     //! Column position (starting with zero) // FIXME array position?
@@ -474,9 +476,10 @@ call_flow_set_group(sip_call_group_t *group);
  * @param ui UI structure pointer
  * @param callid Call-Id header of SIP payload
  * @param addr Address:port string
+ * @param transport Packet transport type @see packet_type
  */
 void
-call_flow_column_add(ui_t *ui, const char *callid, address_t addr);
+call_flow_column_add(ui_t *ui, const char *callid, address_t addr, int transport);
 
 /**
  * @brief Get a flow column data

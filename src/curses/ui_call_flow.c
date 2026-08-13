@@ -247,7 +247,34 @@ struct call_flow_link_header_ip {
     char label[MAX_SETTING_LEN];
     uint16_t ports[CF_LINK_MAX_PORTS];
     int port_count;
+    int transport;
 };
+
+/**
+ * Lowercase transport name for column headers
+ */
+static const char *
+call_flow_transport_str(int transport)
+{
+    switch (transport) {
+        case PACKET_SIP_UDP:
+            return "udp";
+        case PACKET_SIP_TCP:
+            return "tcp";
+        case PACKET_SIP_TLS:
+            return "tls";
+        case PACKET_SIP_WS:
+            return "ws";
+        case PACKET_SIP_WSS:
+            return "wss";
+        case PACKET_RTP:
+            return "rtp";
+        case PACKET_RTCP:
+            return "rtcp";
+        default:
+            return "";
+    }
+}
 
 /**
  * Count how many columns share a display position
@@ -302,6 +329,7 @@ call_flow_linked_header_lines(call_flow_info_t *info, int disppos,
                 continue;
             ip_idx = ip_count++;
             sng_strncpy(ips[ip_idx].ip, col->addr.ip, sizeof(ips[ip_idx].ip));
+            ips[ip_idx].transport = col->transport;
             if (setting_enabled(SETTING_DISPLAY_ALIAS))
                 sng_strncpy(ips[ip_idx].label, get_alias_value(col->addr.ip),
                             sizeof(ips[ip_idx].label));
@@ -322,8 +350,12 @@ call_flow_linked_header_lines(call_flow_info_t *info, int disppos,
 
     for (i = 0; i < ip_count; i++) {
         char portbuf[MAX_SETTING_LEN];
+        const char *proto = "";
         size_t plen = 0;
         portbuf[0] = '\0';
+
+        if (setting_enabled(SETTING_CF_PROTOCOL))
+            proto = call_flow_transport_str(ips[i].transport);
 
         for (j = 0; j < ips[i].port_count; j++) {
             plen += snprintf(portbuf + plen, sizeof(portbuf) - plen, "%s%u",
@@ -333,7 +365,12 @@ call_flow_linked_header_lines(call_flow_info_t *info, int disppos,
         }
 
         if (ips[i].port_count > 0) {
-            snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", ips[i].label, portbuf);
+            if (proto[0])
+                snprintf(lines[i], MAX_SETTING_LEN, "%s:%s:%s", proto, ips[i].label, portbuf);
+            else
+                snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", ips[i].label, portbuf);
+        } else if (proto[0]) {
+            snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", proto, ips[i].label);
         } else {
             snprintf(lines[i], MAX_SETTING_LEN, "%s", ips[i].label);
         }
@@ -383,12 +420,37 @@ call_flow_layout_flow_win(ui_t *ui, call_flow_info_t *info)
 static void
 call_flow_column_label(call_flow_column_t *column, char *out, size_t outsize)
 {
+    const char *proto = "";
+    const char *host;
+
+    if (setting_enabled(SETTING_CF_PROTOCOL))
+        proto = call_flow_transport_str(column->transport);
+
     if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
-        snprintf(out, outsize, "%s", column->alias);
-    } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
-        snprintf(out, outsize, "%s:%u", column->alias, column->addr.port);
+        if (proto[0])
+            snprintf(out, outsize, "%s:%s", proto, column->alias);
+        else
+            snprintf(out, outsize, "%s", column->alias);
+        return;
+    }
+
+    if (setting_enabled(SETTING_DISPLAY_ALIAS))
+        host = column->alias;
+    else
+        host = column->addr.ip;
+
+    if (strlen(host) > 15) {
+        if (proto[0]) {
+            snprintf(out, outsize, "%s:..%.*s:%u",
+                     proto, (int) outsize - 12, host + strlen(host) - 13, column->addr.port);
+        } else {
+            snprintf(out, outsize, "..%.*s:%u",
+                     (int) outsize - 8, host + strlen(host) - 13, column->addr.port);
+        }
+    } else if (proto[0]) {
+        snprintf(out, outsize, "%s:%s:%u", proto, host, column->addr.port);
     } else {
-        snprintf(out, outsize, "%s:%u", column->addr.ip, column->addr.port);
+        snprintf(out, outsize, "%s:%u", host, column->addr.port);
     }
 }
 
@@ -594,12 +656,13 @@ call_flow_draw_footer(ui_t *ui)
         key_action_key_str(ACTION_SHOW_FLOW_EX), "Extended",
         key_action_key_str(ACTION_COMPRESS), "Compressed",
         key_action_key_str(ACTION_LINK_COLUMNS), "Link",
+        key_action_key_str(ACTION_TOGGLE_PROTOCOL), "Proto",
         key_action_key_str(ACTION_SHOW_RAW), "Raw",
         key_action_key_str(ACTION_CYCLE_COLOR), "Colour by",
         key_action_key_str(ACTION_INCREASE_RAW), "Increase Raw"
     };
 
-    ui_draw_bindings(ui, keybindings, 24);
+    ui_draw_bindings(ui, keybindings, 26);
 }
 
 int
@@ -627,8 +690,8 @@ call_flow_draw_columns(ui_t *ui)
 
     // Load columns
     while((msg = call_group_get_next_msg(info->group, msg))) {
-        call_flow_column_add(ui, msg->call->callid, msg->packet->src);
-        call_flow_column_add(ui, msg->call->callid, msg->packet->dst);
+        call_flow_column_add(ui, msg->call->callid, msg->packet->src, msg->packet->type);
+        call_flow_column_add(ui, msg->call->callid, msg->packet->dst, msg->packet->type);
     }
 
     // Add RTP columns FIXME Really
@@ -640,10 +703,10 @@ call_flow_draw_columns(ui_t *ui)
                 if (stream->type == PACKET_RTP && stream_get_count(stream)) {
                     addr = stream->src;
                     addr.port = 0;
-                    call_flow_column_add(ui, NULL, addr);
+                    call_flow_column_add(ui, NULL, addr, PACKET_RTP);
                     addr = stream->dst;
                     addr.port = 0;
-                    call_flow_column_add(ui, NULL, addr);
+                    call_flow_column_add(ui, NULL, addr, PACKET_RTP);
                 }
             }
         }
@@ -736,28 +799,7 @@ call_flow_draw_columns(ui_t *ui)
         } else {
             int sep_x = vline_x - CF_COL_SEP_WIDTH / 2;
 
-            if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
-                snprintf(coltext, MAX_SETTING_LEN, "%s", column->alias);
-            } else if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
-                if (strlen(column->alias) > 15) {
-                    snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
-                             MAX_SETTING_LEN - 9, column->alias + strlen(column->alias) - 13,
-                             column->addr.port);
-                } else {
-                    snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
-                             MAX_SETTING_LEN - 7, column->alias, column->addr.port);
-                }
-            } else {
-                if (strlen(column->addr.ip) > 15) {
-                    snprintf(coltext, MAX_SETTING_LEN, "..%.*s:%u",
-                             MAX_SETTING_LEN - 9, column->addr.ip + strlen(column->addr.ip) - 13,
-                             column->addr.port);
-                } else {
-                    snprintf(coltext, MAX_SETTING_LEN, "%.*s:%u",
-                             MAX_SETTING_LEN - 7, column->addr.ip, column->addr.port);
-                }
-            }
-
+            call_flow_column_label(column, coltext, sizeof(coltext));
             call_flow_print_centered_label(ui->win, label_base + info->header_rows - 1,
                                            vline_x, coltext);
             mvwhline(ui->win, sep_line, sep_x, ACS_HLINE, CF_COL_SEP_WIDTH);
@@ -1645,6 +1687,7 @@ call_flow_draw_raw(ui_t *ui, sip_msg_t *msg)
     call_flow_arrow_t *arrow;
     int raw_width, raw_height;
     int min_raw_width, fixed_raw_width;
+    char header[256];
 
     // Get panel information
     if (!(info = call_flow_info(ui)))
@@ -1701,8 +1744,13 @@ call_flow_draw_raw(ui_t *ui, sip_msg_t *msg)
     mvwvline(ui->win, 1, ui->width - raw_width - 2, ACS_VLINE, ui->height - 2);
     wattroff(ui->win, COLOR_PAIR(CP_BLUE_ON_DEF));
 
-    // Print msg payload
-    draw_message(info->raw_win, msg);
+    // Print msg header (date/time/src -> dst, with protocol when enabled)
+    wattron(raw_win, A_BOLD);
+    mvwprintw(raw_win, 0, 0, "%s", sip_get_msg_header(msg, header, sizeof(header)));
+    wattroff(raw_win, A_BOLD);
+
+    // Print msg payload below the header
+    draw_message_pos(info->raw_win, msg, 2);
 
     // Copy the raw_win contents into the panel
     copywin(raw_win, ui->win, 0, 0, 1, ui->width - raw_width - 1, raw_height, ui->width - 2, 0);
@@ -2039,6 +2087,9 @@ call_flow_handle_key(ui_t *ui, int key)
             case ACTION_LINK_COLUMNS:
                 call_flow_link_columns_menu(ui);
                 break;
+            case ACTION_TOGGLE_PROTOCOL:
+                setting_toggle(SETTING_CF_PROTOCOL);
+                break;
             case ACTION_SELECT:
                 if (info->selected == -1) {
                     info->selected = info->cur_arrow;
@@ -2088,7 +2139,7 @@ call_flow_help(ui_t *ui)
     int height, width;
 
     // Create a new panel and show centered
-    height = 28;
+    height = 30;
     width = 65;
     help_win = newwin(height, width, (LINES - height) / 2, (COLS - width) / 2);
 
@@ -2134,10 +2185,11 @@ call_flow_help(ui_t *ui)
     mvwprintw(help_win, 19, 2, "F8/C        Turn on/off message syntax highlighting");
     mvwprintw(help_win, 20, 2, "F10/l       Link columns into a single flow step");
     mvwprintw(help_win, 21, 2, "a           Toggle display aliases instead of IPs");
-    mvwprintw(help_win, 22, 2, "9/0         Increase/Decrease raw preview size");
-    mvwprintw(help_win, 23, 2, "t           Toggle raw preview display");
-    mvwprintw(help_win, 24, 2, "T           Restore raw preview size");
-    mvwprintw(help_win, 25, 2, "D           Only show SDP messages");
+    mvwprintw(help_win, 22, 2, "p           Toggle transport protocol in addresses");
+    mvwprintw(help_win, 23, 2, "9/0         Increase/Decrease raw preview size");
+    mvwprintw(help_win, 24, 2, "t           Toggle raw preview display");
+    mvwprintw(help_win, 25, 2, "T           Restore raw preview size");
+    mvwprintw(help_win, 26, 2, "D           Only show SDP messages");
 
     // Press any key to close
     wgetch(help_win);
@@ -2414,7 +2466,7 @@ call_flow_set_group(sip_call_group_t *group)
 }
 
 void
-call_flow_column_add(ui_t *ui, const char *callid, address_t addr)
+call_flow_column_add(ui_t *ui, const char *callid, address_t addr, int transport)
 {
     call_flow_info_t *info;
     call_flow_column_t *column;
@@ -2443,6 +2495,7 @@ call_flow_column_add(ui_t *ui, const char *callid, address_t addr)
     column->callids = vector_create(1, 1);
     vector_append(column->callids, (void*)callid);
     column->addr = addr;
+    column->transport = transport;
     if (setting_enabled(SETTING_ALIAS_PORT)) {
         sng_strncpy(column->alias, get_alias_value_vs_port(addr.ip, addr.port), sizeof(column->alias));
     } else {

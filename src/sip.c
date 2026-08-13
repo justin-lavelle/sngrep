@@ -985,6 +985,9 @@ char *
 sip_get_msg_header(sip_msg_t *msg, char *out, size_t maxlen)
 {
     char from_addr[80], to_addr[80], time[80], date[80];
+    char from_disp[96], to_disp[96];
+    const char *proto = "";
+    const char *from_host, *to_host;
 
     // Source and Destination address
     msg_get_attribute(msg, SIP_ATTR_DATE, date);
@@ -992,12 +995,34 @@ sip_get_msg_header(sip_msg_t *msg, char *out, size_t maxlen)
     msg_get_attribute(msg, SIP_ATTR_SRC, from_addr);
     msg_get_attribute(msg, SIP_ATTR_DST, to_addr);
 
-    // Get msg header
     if (setting_enabled(SETTING_DISPLAY_ALIAS)) {
-        snprintf(out, maxlen, "%s %s %s -> %s", date, time, get_alias_value(from_addr), get_alias_value(to_addr));
+        from_host = get_alias_value(from_addr);
+        to_host = get_alias_value(to_addr);
     } else {
-        snprintf(out, maxlen, "%s %s %s -> %s", date, time, from_addr, to_addr);
+        from_host = from_addr;
+        to_host = to_addr;
     }
+
+    if (setting_enabled(SETTING_CF_PROTOCOL) && msg->packet) {
+        switch (msg->packet->type) {
+            case PACKET_SIP_UDP: proto = "udp"; break;
+            case PACKET_SIP_TCP: proto = "tcp"; break;
+            case PACKET_SIP_TLS: proto = "tls"; break;
+            case PACKET_SIP_WS:  proto = "ws";  break;
+            case PACKET_SIP_WSS: proto = "wss"; break;
+            default: proto = ""; break;
+        }
+    }
+
+    if (proto[0]) {
+        snprintf(from_disp, sizeof(from_disp), "%s:%s", proto, from_host);
+        snprintf(to_disp, sizeof(to_disp), "%s:%s", proto, to_host);
+    } else {
+        snprintf(from_disp, sizeof(from_disp), "%s", from_host);
+        snprintf(to_disp, sizeof(to_disp), "%s", to_host);
+    }
+
+    snprintf(out, maxlen, "%s %s %s -> %s", date, time, from_disp, to_disp);
     return out;
 }
 

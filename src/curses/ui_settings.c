@@ -73,6 +73,7 @@ settings_entry_t entries[] = {
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_SPLITCACALLID,   SETTING_CF_SPLITCALLID,     "Compress column display .................." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_SDPONLY,         SETTING_CF_SDP_INFO,        "Show SDP information in messages .........." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_DELTA,           SETTING_CF_DELTA,           "Show delta time between messages .........." },
+    { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_PROTOCOL,        SETTING_CF_PROTOCOL,        "Show transport protocol in addresses ......" },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_MEDIA,           SETTING_CF_MEDIA,           "Show RTP media streams ...................." },
     { CAT_SETTINGS_CALL_FLOW,  FLD_SETTINGS_CF_SCROLLSTEP,      SETTING_CF_SCROLLSTEP,      "Steps for PgUp/PgDown ....................." },
 #ifdef USE_EEP
