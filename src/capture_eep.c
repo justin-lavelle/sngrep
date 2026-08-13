@@ -45,12 +45,71 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <string.h>
 #include <pcap.h>
 #include "capture_eep.h"
 #include "util.h"
 #include "setting.h"
 
 capture_eep_config_t eep_cfg = { 0 };
+
+/**
+ * Infer SIP transport from payload ("SIP/2.0/TLS" in Via, etc.)
+ * @return 0 if a transport was found and stored in @out
+ */
+static int
+capture_eep_transport_from_payload(const u_char *payload, uint32_t len,
+                                   enum packet_type *out)
+{
+    const u_char *p, *end;
+
+    if (!payload || !out || len < 10)
+        return 1;
+
+    end = payload + (len > 1024 ? 1024 : len);
+    for (p = payload; p + 10 < end; p++) {
+        if (strncasecmp((const char *) p, "SIP/2.0/", 8) != 0)
+            continue;
+        p += 8;
+        if (!strncasecmp((const char *) p, "WSS", 3)) {
+            *out = PACKET_SIP_WSS;
+            return 0;
+        }
+        if (!strncasecmp((const char *) p, "WS", 2)
+            && (p[2] == '\0' || p[2] == '\r' || p[2] == '\n'
+                || p[2] == ' ' || p[2] == ';')) {
+            *out = PACKET_SIP_WS;
+            return 0;
+        }
+        if (!strncasecmp((const char *) p, "TLS", 3)) {
+            *out = PACKET_SIP_TLS;
+            return 0;
+        }
+        if (!strncasecmp((const char *) p, "TCP", 3)) {
+            *out = PACKET_SIP_TCP;
+            return 0;
+        }
+        if (!strncasecmp((const char *) p, "UDP", 3)) {
+            *out = PACKET_SIP_UDP;
+            return 0;
+        }
+        break;
+    }
+    return 1;
+}
+
+/**
+ * Resolve HEP packet SIP transport from payload Via and/or IP proto id
+ */
+static enum packet_type
+capture_eep_packet_type(uint8_t ip_proto, const u_char *payload, uint32_t len)
+{
+    enum packet_type type;
+
+    if (capture_eep_transport_from_payload(payload, len, &type) == 0)
+        return type;
+    return packet_type_from_ipproto(ip_proto);
+}
 
 void *
 accept_eep_client(void *info);
@@ -692,7 +751,7 @@ capture_eep_receive_v2()
     pkt = packet_create((family == AF_INET) ? 4 : 6, proto, src, dst, 0);
     packet_add_frame(pkt, &frame_pcap_header, frame_payload);
     packet_set_transport_data(pkt, src.port, dst.port);
-    packet_set_type(pkt, packet_type_from_ipproto(proto));
+    packet_set_type(pkt, capture_eep_packet_type(proto, payload, header.caplen));
     packet_set_payload(pkt, payload, header.caplen);
 
     // We don't longer require frame payload anymore, because adding the frame to packet clones its memory
@@ -889,7 +948,7 @@ capture_eep_receive_v3(const u_char *pkt, uint32_t size)
     // Create a new packet
     pkt_new = packet_create((hg.ip_family.data == AF_INET)?4:6, hg.ip_proto.data, src, dst, 0);
     packet_add_frame(pkt_new, &frame_pcap_header, frame_payload);
-    packet_set_type(pkt_new, packet_type_from_ipproto(hg.ip_proto.data));
+    packet_set_type(pkt_new, capture_eep_packet_type(hg.ip_proto.data, payload, header.caplen));
     packet_set_payload(pkt_new, payload, header.caplen);
 
     // We don't longer require frame payload anymore, because adding the frame to packet clones its memory

@@ -136,9 +136,15 @@ packet_set_type(packet_t *packet, enum packet_type type)
 enum packet_type
 packet_type_from_ipproto(uint8_t proto)
 {
-    if (proto == IPPROTO_TCP)
-        return PACKET_SIP_TCP;
-    return PACKET_SIP_UDP;
+    switch (proto) {
+        case IPPROTO_TCP:
+            return PACKET_SIP_TCP;
+        case IPPROTO_SIP_TLS:
+            return PACKET_SIP_TLS;
+        case IPPROTO_UDP:
+        default:
+            return PACKET_SIP_UDP;
+    }
 }
 
 enum packet_type
@@ -159,7 +165,9 @@ packet_transport(packet_t *packet)
             break;
     }
 
-    /* Prefer IP protocol when known (HEP used to force PACKET_SIP_UDP) */
+    /* Prefer IP protocol when known (HEP may use non-standard TLS id) */
+    if (packet->proto == IPPROTO_SIP_TLS)
+        return PACKET_SIP_TLS;
     if (packet->proto == IPPROTO_TCP)
         return PACKET_SIP_TCP;
     if (packet->proto == IPPROTO_UDP)

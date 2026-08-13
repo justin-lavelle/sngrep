@@ -53,6 +53,12 @@ enum packet_type {
     PACKET_RTCP,
 };
 
+/**
+ * Non-IANA IP protocol ID used by some HEP/EEP capture agents for SIP over TLS.
+ * (Seen in Homer-style captures; Via line confirms SIP/2.0/TLS.)
+ */
+#define IPPROTO_SIP_TLS 22
+
 //! Shorter declaration of packet structure
 typedef struct packet packet_t;
 //! Shorter declaration of frame structure
