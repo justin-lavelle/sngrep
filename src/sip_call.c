@@ -270,7 +270,7 @@ call_get_attribute(sip_call_t *call, enum sip_attr_id id, char *value)
             break;
         case SIP_ATTR_TRANSPORT:
             first = vector_first(call->msgs);
-            sprintf(value, "%s", sip_transport_str(first->packet->type));
+            sprintf(value, "%s", sip_transport_str(packet_transport(first->packet)));
             break;
         case SIP_ATTR_CONVDUR:
             timeval_to_duration(msg_get_time(call->cstart_msg), msg_get_time(call->cend_msg), value);

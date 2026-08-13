@@ -29,6 +29,7 @@
 #include "config.h"
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
 #include "packet.h"
 
 packet_t *
@@ -130,6 +131,41 @@ void
 packet_set_type(packet_t *packet, enum packet_type type)
 {
     packet->type = type;
+}
+
+enum packet_type
+packet_type_from_ipproto(uint8_t proto)
+{
+    if (proto == IPPROTO_TCP)
+        return PACKET_SIP_TCP;
+    return PACKET_SIP_UDP;
+}
+
+enum packet_type
+packet_transport(packet_t *packet)
+{
+    if (!packet)
+        return PACKET_SIP_UDP;
+
+    /* TLS / WebSocket overlays take precedence over raw IP protocol */
+    switch (packet->type) {
+        case PACKET_SIP_TLS:
+        case PACKET_SIP_WS:
+        case PACKET_SIP_WSS:
+        case PACKET_RTP:
+        case PACKET_RTCP:
+            return packet->type;
+        default:
+            break;
+    }
+
+    /* Prefer IP protocol when known (HEP used to force PACKET_SIP_UDP) */
+    if (packet->proto == IPPROTO_TCP)
+        return PACKET_SIP_TCP;
+    if (packet->proto == IPPROTO_UDP)
+        return PACKET_SIP_UDP;
+
+    return packet->type;
 }
 
 void

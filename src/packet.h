@@ -160,6 +160,21 @@ void
 packet_set_type(packet_t *packet, enum packet_type type);
 
 /**
+ * @brief Map IPPROTO_UDP/TCP to a SIP packet type
+ */
+enum packet_type
+packet_type_from_ipproto(uint8_t proto);
+
+/**
+ * @brief Effective SIP transport for a packet
+ *
+ * Uses dissected type for TLS/WS/WSS, otherwise derives UDP/TCP from
+ * the IP protocol field (important for HEP/EEP captures).
+ */
+enum packet_type
+packet_transport(packet_t *packet);
+
+/**
  * @brief Set packet payload when it can not be get from packet
  */
 void

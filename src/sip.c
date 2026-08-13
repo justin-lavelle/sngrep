@@ -1004,7 +1004,7 @@ sip_get_msg_header(sip_msg_t *msg, char *out, size_t maxlen)
     }
 
     if (setting_enabled(SETTING_CF_PROTOCOL) && msg->packet) {
-        switch (msg->packet->type) {
+        switch (packet_transport(msg->packet)) {
             case PACKET_SIP_UDP: proto = "udp"; break;
             case PACKET_SIP_TCP: proto = "tcp"; break;
             case PACKET_SIP_TLS: proto = "tls"; break;

@@ -733,8 +733,8 @@ call_flow_draw_columns(ui_t *ui)
 
     // Load columns
     while((msg = call_group_get_next_msg(info->group, msg))) {
-        call_flow_column_add(ui, msg->call->callid, msg->packet->src, msg->packet->type);
-        call_flow_column_add(ui, msg->call->callid, msg->packet->dst, msg->packet->type);
+        call_flow_column_add(ui, msg->call->callid, msg->packet->src, packet_transport(msg->packet));
+        call_flow_column_add(ui, msg->call->callid, msg->packet->dst, packet_transport(msg->packet));
     }
 
     // Add RTP columns FIXME Really
@@ -1141,16 +1141,16 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
             mvwaddch(flow_win, aline - 1, startpos + 2, ACS_HLINE);
         }
         call_flow_print_protocol_label(flow_win, aline, startpos + (msg->retrans ? 5 : 3),
-                                       msg->packet->type, color, bright);
+                                       packet_transport(msg->packet), color, bright);
     } else if (arrow->dir == CF_ARROW_RIGHT) {
         if (setting_enabled(SETTING_CF_PROTOCOL)) {
-            const char *proto = call_flow_transport_str(msg->packet->type);
+            const char *proto = call_flow_transport_str(packet_transport(msg->packet));
             if (proto[0]) {
                 int plen = (int) strlen(proto) + 2;
                 int tip = msg->retrans ? 4 : 2;
                 if (endpos - tip - plen > startpos + 2)
                     call_flow_print_protocol_label(flow_win, aline, endpos - tip - plen,
-                                                   msg->packet->type, color, bright);
+                                                   packet_transport(msg->packet), color, bright);
             }
         }
         mvwaddch(flow_win, aline, endpos - 2, '>');
@@ -1165,12 +1165,12 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
             mvwaddch(flow_win, aline, startpos + 4, '<');
         }
         if (setting_enabled(SETTING_CF_PROTOCOL)) {
-            const char *proto = call_flow_transport_str(msg->packet->type);
+            const char *proto = call_flow_transport_str(packet_transport(msg->packet));
             if (proto[0]) {
                 int tip = msg->retrans ? 5 : 3;
                 if (startpos + tip + (int) strlen(proto) + 2 < endpos - 2)
                     call_flow_print_protocol_label(flow_win, aline, startpos + tip,
-                                                   msg->packet->type, color, bright);
+                                                   packet_transport(msg->packet), color, bright);
             }
         }
     }

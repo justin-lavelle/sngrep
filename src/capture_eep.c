@@ -692,7 +692,7 @@ capture_eep_receive_v2()
     pkt = packet_create((family == AF_INET) ? 4 : 6, proto, src, dst, 0);
     packet_add_frame(pkt, &frame_pcap_header, frame_payload);
     packet_set_transport_data(pkt, src.port, dst.port);
-    packet_set_type(pkt, PACKET_SIP_UDP);
+    packet_set_type(pkt, packet_type_from_ipproto(proto));
     packet_set_payload(pkt, payload, header.caplen);
 
     // We don't longer require frame payload anymore, because adding the frame to packet clones its memory
@@ -889,7 +889,7 @@ capture_eep_receive_v3(const u_char *pkt, uint32_t size)
     // Create a new packet
     pkt_new = packet_create((hg.ip_family.data == AF_INET)?4:6, hg.ip_proto.data, src, dst, 0);
     packet_add_frame(pkt_new, &frame_pcap_header, frame_payload);
-    packet_set_type(pkt_new, PACKET_SIP_UDP);
+    packet_set_type(pkt_new, packet_type_from_ipproto(hg.ip_proto.data));
     packet_set_payload(pkt_new, payload, header.caplen);
 
     // We don't longer require frame payload anymore, because adding the frame to packet clones its memory
