@@ -350,12 +350,8 @@ call_flow_linked_header_lines(call_flow_info_t *info, int disppos,
 
     for (i = 0; i < ip_count; i++) {
         char portbuf[MAX_SETTING_LEN];
-        const char *proto = "";
         size_t plen = 0;
         portbuf[0] = '\0';
-
-        if (setting_enabled(SETTING_CF_PROTOCOL))
-            proto = call_flow_transport_str(ips[i].transport);
 
         for (j = 0; j < ips[i].port_count; j++) {
             plen += snprintf(portbuf + plen, sizeof(portbuf) - plen, "%s%u",
@@ -365,12 +361,7 @@ call_flow_linked_header_lines(call_flow_info_t *info, int disppos,
         }
 
         if (ips[i].port_count > 0) {
-            if (proto[0])
-                snprintf(lines[i], MAX_SETTING_LEN, "%s:%s:%s", proto, ips[i].label, portbuf);
-            else
-                snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", ips[i].label, portbuf);
-        } else if (proto[0]) {
-            snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", proto, ips[i].label);
+            snprintf(lines[i], MAX_SETTING_LEN, "%s:%s", ips[i].label, portbuf);
         } else {
             snprintf(lines[i], MAX_SETTING_LEN, "%s", ips[i].label);
         }
@@ -420,17 +411,10 @@ call_flow_layout_flow_win(ui_t *ui, call_flow_info_t *info)
 static void
 call_flow_column_label(call_flow_column_t *column, char *out, size_t outsize)
 {
-    const char *proto = "";
     const char *host;
 
-    if (setting_enabled(SETTING_CF_PROTOCOL))
-        proto = call_flow_transport_str(column->transport);
-
     if (setting_enabled(SETTING_CF_SPLITCALLID) || !column->addr.port) {
-        if (proto[0])
-            snprintf(out, outsize, "%s:%s", proto, column->alias);
-        else
-            snprintf(out, outsize, "%s", column->alias);
+        snprintf(out, outsize, "%s", column->alias);
         return;
     }
 
@@ -440,15 +424,8 @@ call_flow_column_label(call_flow_column_t *column, char *out, size_t outsize)
         host = column->addr.ip;
 
     if (strlen(host) > 15) {
-        if (proto[0]) {
-            snprintf(out, outsize, "%s:..%.*s:%u",
-                     proto, (int) outsize - 12, host + strlen(host) - 13, column->addr.port);
-        } else {
-            snprintf(out, outsize, "..%.*s:%u",
-                     (int) outsize - 8, host + strlen(host) - 13, column->addr.port);
-        }
-    } else if (proto[0]) {
-        snprintf(out, outsize, "%s:%s:%u", proto, host, column->addr.port);
+        snprintf(out, outsize, "..%.*s:%u",
+                 (int) outsize - 8, host + strlen(host) - 13, column->addr.port);
     } else {
         snprintf(out, outsize, "%s:%u", host, column->addr.port);
     }
@@ -1095,7 +1072,29 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
             mvwaddch(flow_win, aline - 1, startpos + 3, ACS_URCORNER);
             mvwaddch(flow_win, aline - 1, startpos + 2, ACS_HLINE);
         }
+        if (setting_enabled(SETTING_CF_PROTOCOL)) {
+            const char *proto = call_flow_transport_str(msg->packet->type);
+            if (proto[0]) {
+                char protostr[16];
+                int tip = msg->retrans ? 5 : 3;
+                snprintf(protostr, sizeof(protostr), "(%s)", proto);
+                mvwprintw(flow_win, aline, startpos + tip, "%s", protostr);
+            }
+        }
     } else if (arrow->dir == CF_ARROW_RIGHT) {
+        if (setting_enabled(SETTING_CF_PROTOCOL)) {
+            const char *proto = call_flow_transport_str(msg->packet->type);
+            if (proto[0]) {
+                char protostr[16];
+                int plen, tip;
+
+                snprintf(protostr, sizeof(protostr), "(%s)", proto);
+                plen = (int) strlen(protostr);
+                tip = msg->retrans ? 4 : 2;
+                if (endpos - tip - plen > startpos + 2)
+                    mvwprintw(flow_win, aline, endpos - tip - plen, "%s", protostr);
+            }
+        }
         mvwaddch(flow_win, aline, endpos - 2, '>');
         if (msg->retrans) {
             mvwaddch(flow_win, aline, endpos - 3, '>');
@@ -1106,6 +1105,16 @@ call_flow_draw_message(ui_t *ui, call_flow_arrow_t *arrow, int cline)
         if (msg->retrans) {
             mvwaddch(flow_win, aline, startpos + 3, '<');
             mvwaddch(flow_win, aline, startpos + 4, '<');
+        }
+        if (setting_enabled(SETTING_CF_PROTOCOL)) {
+            const char *proto = call_flow_transport_str(msg->packet->type);
+            if (proto[0]) {
+                char protostr[16];
+                int tip = msg->retrans ? 5 : 3;
+                snprintf(protostr, sizeof(protostr), "(%s)", proto);
+                if (startpos + tip + (int) strlen(protostr) < endpos - 2)
+                    mvwprintw(flow_win, aline, startpos + tip, "%s", protostr);
+            }
         }
     }
 
@@ -2185,7 +2194,7 @@ call_flow_help(ui_t *ui)
     mvwprintw(help_win, 19, 2, "F8/C        Turn on/off message syntax highlighting");
     mvwprintw(help_win, 20, 2, "F10/l       Link columns into a single flow step");
     mvwprintw(help_win, 21, 2, "a           Toggle display aliases instead of IPs");
-    mvwprintw(help_win, 22, 2, "p           Toggle transport protocol in addresses");
+    mvwprintw(help_win, 22, 2, "p           Toggle transport protocol on message arrows");
     mvwprintw(help_win, 23, 2, "9/0         Increase/Decrease raw preview size");
     mvwprintw(help_win, 24, 2, "t           Toggle raw preview display");
     mvwprintw(help_win, 25, 2, "T           Restore raw preview size");
