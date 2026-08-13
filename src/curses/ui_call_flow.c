@@ -489,8 +489,9 @@ call_flow_column_label(call_flow_column_t *column, char *out, size_t outsize)
         host = column->addr.ip;
 
     if (strlen(host) > 15) {
-        snprintf(out, outsize, "..%.*s:%u",
-                 (int) outsize - 8, host + strlen(host) - 13, column->addr.port);
+        /* Last 13 chars of host; fixed width keeps snprintf within outsize */
+        snprintf(out, outsize, "..%.13s:%u",
+                 host + strlen(host) - 13, column->addr.port);
     } else {
         snprintf(out, outsize, "%s:%u", host, column->addr.port);
     }
